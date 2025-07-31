@@ -2,9 +2,7 @@
 Get average profiles
 """
 
-from vegTools.functions import get_mean_profiles
-
-from vegTools.functions import get_profiles, get_disp_stress , get_viscous_stress, get_reynolds_stress, get_mean_profiles_x , get_mean_profiles_x_structured
+from vegTools.functions import get_profiles , get_viscous_stress, get_mean_profiles_x , get_mean_profiles_x_structured
 
 
 """

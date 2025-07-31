@@ -9,33 +9,6 @@ import math
 """
 Get average profiles
 """
-def get_mean_profiles(list_var, z, V, Cx, Cy):
-    """
-    Compute volume-weighted mean profiles along the z-axis.
-
-    Inputs:
-    - list_var: list of arrays to compute the mean (e.g., velocity components)
-    - z: array of z-coordinates of each cell with readmesh of fluidfoam
-    - V: array of cell volumes with writeCellVolumes of openfoam
-    - Cx, Cy: coordinates with writeCellCentres of openfoam 
-
-    Outputs:
-    - unique_z: unique z values defining slices
-    - mean_values: list of mean values for each variable per slice
-    """
-    df = pd.DataFrame({'z': np.round(z, 6), 'V': V})
-    for i, var in enumerate(list_var):
-        df[f'var_{i}'] = var * V
-
-    df_sum = df.groupby('z', sort=True).sum().reset_index()
-    unique_z = df_sum['z'].values
-    V_tot_per_z = df_sum['V'].values  
-    
-    mean_values = []
-    for i in range(len(list_var)) : 
-        mean_values.append(df_sum[f'var_{i}'].values / V_tot_per_z )
-    
-    return unique_z, mean_values
 
 def get_profiles(list_var, z, V):
     """
@@ -63,27 +36,6 @@ def get_profiles(list_var, z, V):
         mean_values.append(df_sum[f'var_{i}'].values / V_tot_per_z )
     
     return mean_values
-
-def get_disp_stress(z ,UU,Ui,Uj,V,Cx,Cy, rho = None) : 
-    """
-    Compute volume-weighted mean profiles of dispersive stress.
-
-    Inputs:
-    - z: array of z-coordinates of each cell with readmesh of fluidfoam
-    - Ui,Uj : velocity used in the calculation, should be averaged in time 
-    - V: array of cell volumes with writeCellVolumes of openfoam
-
-    Outputs:
-    - unique_z: unique z values defining slices
-    - dispersive stress in [Pa]
-    """
-
-    if rho is None : 
-        rho = 1000 #[kg/m3]
-    
-    unique_z , mean_values = get_mean_profiles([UU , Ui , Uj],z, V, Cx, Cy)
-    disp_stress =  - rho * ( mean_values[0] - mean_values[1] * mean_values[2])
-    return unique_z , disp_stress
 
 def get_viscous_stress(z ,gradU,V, rho = None , nu = None) : 
     """
@@ -114,36 +66,6 @@ def get_viscous_stress(z ,gradU,V, rho = None , nu = None) :
 
     viscous_stress = np.array(rho * nu * gradU_mean)
     return unique_z , viscous_stress
-
-def get_reynolds_stress(z ,R ,V, rho = None ) : 
-    """
-    Compute volume-weighted mean profiles of Reynolds stress.
-    Reynolds Stress from RANS profiles computed with turbulent viscosity
-
-    Inputs:
-    - z: array of z-coordinates of each cell with readmesh of fluidfoam
-    - R : Reynolds Stress given by openfoam : should be averaged in time 
-    - V: array of cell volumes with writeCellVolumes of openfoam
-
-    Outputs:
-    - unique_z: unique z values defining slices
-    - Reynolds stress in [Pa]
-    """
-
-    if (rho is None) : 
-        rho = 1000 #[kg/m3]
-
-    #DataFrame Creation 
-    df = pd.DataFrame({'z': np.round(z, 6),'R' : R*V, 'V': V})
-    
-    df_sum = df.groupby('z', sort=True).sum().reset_index()
-    unique_z = df_sum['z'].values
-    V_tot_per_z = df_sum['V'].values
-
-    R_mean = df_sum['R'] / V_tot_per_z
-
-    reynolds_stress =   rho * np.array(R_mean)
-    return unique_z , reynolds_stress
 
 def get_mean_profiles_x(list_var, x, V, nb_inter):
     """

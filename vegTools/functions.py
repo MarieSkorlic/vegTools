@@ -67,6 +67,49 @@ def get_viscous_stress(z ,gradU,V, rho = None , nu = None) :
     viscous_stress = np.array(rho * nu * gradU_mean)
     return unique_z , viscous_stress
 
+def get_primeprime(var, z , mean_per_slice):
+    """
+    This function computes the spatial fluctuations (var') 
+    of a variable without sorting along the z-axis.
+    It also preserves the original shape of the OpenFoam fields. 
+    The function get_profiles can then still be used.
+
+    Inputs:
+    - var: 1D array containing the variable from which to compute the primeprime values.
+    - z: 1D array of z-coordinates of each cell with readmesh of fluidfoam
+    - mean_per_slice: 1D array containing the average value for each slice (computed using get_profiles function).
+
+    Output:
+    - var_primeprime: 1D array with the spatial variation of the variable var (var'').
+    Same shape as list_var
+    """
+    # Find unique_z which is sorted thanks to the function np.unique
+    unique_z = np.unique(z)
+
+    
+    ### For each cell in the mesh, find its position in the mesh closer
+    ### from the values in unique_z array
+    # ------------------------------------------------#
+    #Version which takes too much time for large meshes 
+    # indices = np.zeros(len(z)) 
+    # for cell in range(len(z)): 
+    #     idz = np.argmin(np.abs(unique_z - z[cell])) 
+    #     indices[cell] = idz
+    # ------------------------------------------------#
+
+
+    # ------------------------------------------------#
+    #Faster version to find indices 
+    #indices contains array from 0 to len(unique_z)
+    indices = np.searchsorted(unique_z, z, side='right') - 1
+    indices = np.clip(indices, 0, len(unique_z) - 1) 
+    # ------------------------------------------------#
+
+    # Subtraction of the mean corresponding to the slice
+    var_primeprime = var - mean_per_slice[indices]
+
+    return var_primeprime
+
 def get_mean_profiles_x(list_var, x, V, nb_inter):
     """
     Compute volume-weighted mean profiles along the x-axis using fixed intervals.
@@ -127,6 +170,7 @@ def get_mean_profiles_x_structured(list_var, x, V):
         mean_values.append(df_sum[f'var_{i}'].values / V_tot_per_x )
     
     return unique_x, mean_values
+
 
 
 """

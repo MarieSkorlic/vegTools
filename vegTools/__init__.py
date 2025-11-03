@@ -22,3 +22,10 @@ from vegTools.functions import get_u_star, average_bottom
 Extract informations from Description.ods
 """
 from vegTools.functions import read_description
+
+
+"""
+Import functions from veg_relations
+"""
+
+from vegTools.functions import dragcoef_etminan , dragcoef_tanino , dragcoef_tinoco, TKETanino, ustar_condefrias, ustar_etminan, ustar_yang , get_gradP_veg

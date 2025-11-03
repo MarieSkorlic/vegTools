@@ -355,4 +355,132 @@ def read_description(PATH_description,cases) :
 
 
 
+"""
+Import functions from veg_relations
+"""
 
+def dragcoef_etminan(phiv, Rep):
+    # return the drag coefficient according to Etminan et al. (2017)
+    coef = (1-phiv)/(1-(2*phiv/np.pi)**(0.5))
+    Rec = Rep*coef
+    Cdc = 1+10*Rec**(-2/3)
+    Cdp = coef**2*Cdc
+
+    return Cdp, Cdc
+
+def dragcoef_tanino(phiv):
+    # return the drag coefficient according to Tanino and Nepf (2008)
+    Cd = 2*(0.46+3.8*phiv)
+    return Cd
+
+def dragcoef_tinoco(phiv, Rep):
+    # return the drag coefficient according to Tanino and Nepf (2008)
+    Cd = 2*(0.58+6.5*phiv)
+    return Cd
+
+def TKETanino(phiv, Rep, dv, nu=1e-6, drag_law='Etminan'):
+    '''
+    Compute the theoretical TKE in vegetation array following Tanino and Nepf (2008)
+    '''
+
+    #Compute empirical coefficients which values depend on phiv
+    try: #phiv is an array with more than 1 value
+        delta = 1.21*np.ones(len(phiv))
+        lt = dv*np.ones(len(phiv))
+        I = np.where(phiv > np.pi/(4*2.79**2))
+        delta[I] = 0.77
+
+        sn = ((np.pi/(4*phiv))**(0.5)-1)*dv
+        lt[I] = sn[I]
+    except TypeError: #phiv is a float
+        if phiv <= np.pi/(4*2.79**2):
+            delta = 1.21
+            lt = dv
+        else:
+            delta = 0.77
+            lt = ((np.pi/(4*phiv))**(0.5)-1)*dv
+
+    if drag_law == 'Etminan':
+        #Compute drag coefficient following Etminan et al. (2017)
+        Cdp, Cdc = dragcoef_etminan(phiv, Rep)
+        Cd = Cdp
+    elif drag_law == 'Tanino':
+        Cd = dragcoef_tanino(phiv)
+    elif drag_law == 'Tinoco':
+        Cd = dragcoef_tinoco(phiv)
+    #Theoretical turbulent kinetic energy
+    kth = delta*(lt/dv*phiv/((1-phiv)*np.pi/2)*Cd)**(2/3)*(Rep*nu/dv)**2
+
+    return kth
+
+def ustar_condefrias(phiv, Rep, dv, nu=1e-6, drag_law='Etminan', C=9.5, Cf=0.0025):
+    '''
+    Conde-Frias et al. (2023) law for bed friction velocity ustar
+    '''
+
+    kth = TKETanino(phiv, Rep, dv, nu, drag_law)
+
+    ustar = np.maximum(C*(kth/Rep)**(0.5), Cf**(0.5)*Rep*nu/dv)
+    return ustar
+
+def ustar_etminan(phiv, Rep, dv, nu=1e-6, drag_law='Etminan', C=5.15):
+    '''
+    Etminan et al. (2018) law for bed friction velocity ustar
+    '''
+
+    #Theoretical turbulent kinetic energy according to Tanino and Nepf (2008) 
+    kth = TKETanino(phiv, Rep, dv, nu, drag_law)
+    #Compute drag coefficient
+    if drag_law == 'Etminan':
+        #Compute drag coefficient following Etminan et al. (2017)
+        Cdp, Cdc = dragcoef_etminan(phiv, Rep)
+    elif drag_law == 'Tanino':
+        Cd = dragcoef_tanino(phiv)
+        Cdc = Cd
+    #Constriction Velocity
+    coef = (1-phiv)/(1-(2*phiv/np.pi)**(0.5))
+    Rec = Rep*coef
+    Uc = Rec*nu/dv
+    Up = Rep*nu/dv
+    #frontal area
+    a = phiv/(np.pi/4*dv)
+    #Height of the boundary layer
+    Hv = C*np.sqrt(nu*kth/(Cdc*a*Uc**3))
+    ReHv = Up*Hv/nu
+    #friction velocity
+    ustar = np.sqrt(2/ReHv)*Up
+    return ustar
+
+def ustar_yang(phiv, Rep, dv, nu=1e-6, Cf=0.0025):
+    '''
+    Yand and Nepf (2015) law for bed friction velocity ustar
+    '''
+
+    #Bulk Velocity
+    Up = Rep*nu/dv
+    Ub = Up/(1-phiv)
+    #friction velocity
+    ustar = np.maximum(2*np.sqrt(nu*Up/dv), Cf**(0.5)*Up)
+    return ustar
+
+def get_gradP_veg(phiv, Rep, dv, nu=1e-6, rhof=1000, drag_law='Etminan'):
+
+    if drag_law == 'Etminan':
+        #Compute drag coefficient following Etminan et al. (2017)
+        Cdp, Cdc = dragcoef_etminan(phiv, Rep)
+        Cd = Cdp
+    elif drag_law == 'Tanino':
+        Cd = dragcoef_tanino(phiv)
+    elif drag_law == 'Tinoco':
+        Cd = dragcoef_tinoco(phiv)
+
+    #Constriction Velocity
+    coef = (1-phiv)/(1-(2*phiv/np.pi)**(0.5))
+    Rec = Rep*coef
+    Uc = Rec*nu/dv
+    Up = Rep*nu/dv
+    
+    Kv = rhof*2/np.pi*Cd/((1-phiv)*dv)*Up
+    gradP = phiv*Kv*Up
+
+    return gradP

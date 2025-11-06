@@ -338,22 +338,26 @@ def read_description(PATH_description,cases) :
     mask = df_description["name"] == run_name
     df_selected = df_description[mask]
 
-    #Extract data from the selected line
-    name_run = df_selected["name"].values[0]
-    phi = df_selected["phi"].values[0]
-    Rep = df_selected["Rep"].values[0]
-    ratio = df_selected["ratio"].values[0]
-    dr = df_selected["dr"].values[0]
-    marker = df_selected["marker"].values[0]
-    color = df_selected["color"].values[0]
-    title = df_selected["title"].values[0]
-    if type(title)!= str : 
-        if (math.isnan(title))  : 
-            title = ' '
+    # Si aucune ligne trouvée
+    if df_selected.empty:
+        raise ValueError(f"Aucune entrée trouvée pour '{run_name}' dans Description.ods")
 
-    return title , phi , Rep , ratio , dr , marker , color
+    # On récupère la ligne sous forme de dict clé = nom de la colonne
+    info = df_selected.iloc[0].to_dict()
 
+    # Remplacer NaN par chaîne vide pour les valeurs non string
+    for k, v in info.items():
+        if isinstance(v, float) and math.isnan(v):
+            info[k] = ""
 
+     # Optionnel : retire les champs vides
+    info = {k:v for k,v in info.items() if v != ""}
+
+    # Si title n'existe pas dans les colonnes, on le crée vide
+    if "title" not in info:
+        info["title"] = ""
+    
+    return info
 
 """
 Import functions from veg_relations

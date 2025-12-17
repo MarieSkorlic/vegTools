@@ -171,14 +171,16 @@ def get_mean_profiles_x_structured(list_var, x, V):
     
     return unique_x, mean_values
 
-def get_fdz(simu, D = 0.01,num_cylinder = 2) : 
+def get_fdz(simu,phi, D = 0.01,num_cylinder = 2, rho = 1000) : 
     """
     Given a class simu, this function computes profiles of 
     drag force against cylinder(s) 
     Inputs : 
-        - simu (OpenFoamSimu class)
+        - simu  = (OpenFoamSimu class)
+        - phi = density of vegetation
         - (optional) D = stem diameter
         - (optional) num_cylinder = number of cylinders in the mesh
+        - (optional) rho = density of fluid
     Outputs : 
         - fdz = profile of drag force
     """
@@ -206,8 +208,7 @@ def get_fdz(simu, D = 0.01,num_cylinder = 2) :
     simu.dz_slice = get_dz_slice(simu.z, simu.V)
     frontal_area = simu.dz_slice * D * num_cylinder  #Frontal area for all cylinders, assuming that mesh is structured on z axis
 
-
-    fd_z = np.array((  df_force_slice['Fdx'] * 2 * simu.phi    ) / (rho * np.pi * simu.dz_slice * D**2))  #[ m²/s²]
+    fd_z = np.array((  df_force_slice['Fdx'] * 2 * phi   ) / (rho * np.pi * simu.dz_slice * D**2))  #[ m²/s²]
 
     return fd_z
 

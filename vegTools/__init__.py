@@ -3,7 +3,7 @@ Get average profiles
 """
 
 from vegTools.functions import get_profiles , get_viscous_stress, get_primeprime, get_mean_profiles_x , get_mean_profiles_x_structured
-
+from vegTools.functions import get_fdz
 
 """
 Get geometric characteristic on the mesh 

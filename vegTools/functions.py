@@ -171,7 +171,45 @@ def get_mean_profiles_x_structured(list_var, x, V):
     
     return unique_x, mean_values
 
+def get_fdz(simu, D = 0.01,num_cylinder = 2) : 
+    """
+    Given a class simu, this function computes profiles of 
+    drag force against cylinder(s) 
+    Inputs : 
+        - simu (OpenFoamSimu class)
+        - (optional) D = stem diameter
+        - (optional) num_cylinder = number of cylinders in the mesh
+    Outputs : 
+        - fdz = profile of drag force
+    """
+    df_forces_total = []  #Forces for each cylinder
+    for k in range(num_cylinder): 
+        # Read mesh at cylinder
+        zc = getattr(simu,f'z_cylinder_{k+1}')
 
+        #Read forces on each cylinder
+        forceForm_name = f'forceFormCylbar_cylinder_{k+1}0'  # Force on x axis
+        forceVis_name = f'forceVisCylbar_cylinder_{k+1}0'  # Force on x axis
+        forcex_value = getattr(simu, forceForm_name) + getattr(simu, forceVis_name)  # force [N]
+        
+        # Compute magnitude of force 
+        df_force = pd.DataFrame({'zc': np.round(zc, 6), 'Fdx':  forcex_value})
+        df_forces_total.append(df_force) 
+
+
+    # Concantenate all cylinders dataFrames
+    df_force_total = pd.concat(df_forces_total)
+
+    # Sum forces on each cylinders
+    df_force_slice = df_force_total.groupby('zc').sum().reset_index()
+
+    simu.dz_slice = get_dz_slice(simu.z, simu.V)
+    frontal_area = simu.dz_slice * D * num_cylinder  #Frontal area for all cylinders, assuming that mesh is structured on z axis
+
+
+    fd_z = np.array((  df_force_slice['Fdx'] * 2 * simu.phi    ) / (rho * np.pi * simu.dz_slice * D**2))  #[ m²/s²]
+
+    return fd_z
 
 """
 Get geometric characteristic on the mesh 

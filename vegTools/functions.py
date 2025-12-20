@@ -171,13 +171,17 @@ def get_mean_profiles_x_structured(list_var, x, V):
     
     return unique_x, mean_values
 
-def get_fdz(simu,phi, D = 0.01,num_cylinder = 2, rho = 1000) : 
+def get_fdz(simu,phi, mode = 'total', D = 0.01,num_cylinder = 2, rho = 1000) : 
     """
     Given a class simu, this function computes profiles of 
     drag force against cylinder(s) 
     Inputs : 
         - simu  = (OpenFoamSimu class)
         - phi = density of vegetation
+        - (optional) mode : 
+                - total = Fdp + Fdv
+                - viscous = Fdv
+                - form = Fdp
         - (optional) D = stem diameter
         - (optional) num_cylinder = number of cylinders in the mesh
         - (optional) rho = density of fluid
@@ -192,7 +196,15 @@ def get_fdz(simu,phi, D = 0.01,num_cylinder = 2, rho = 1000) :
         #Read forces on each cylinder
         forceForm_name = f'forceFormCylbar_cylinder_{k+1}0'  # Force on x axis
         forceVis_name = f'forceVisCylbar_cylinder_{k+1}0'  # Force on x axis
-        forcex_value = getattr(simu, forceForm_name) + getattr(simu, forceVis_name)  # force [N]
+        
+        if mode == "total" : 
+            forcex_value = getattr(simu, forceForm_name) + getattr(simu, forceVis_name)  # force [N]
+        elif mode == "viscous" : 
+            print(f"Viscous Drag only cylinder{k+1}")
+            forcex_value = getattr(simu, forceVis_name)  # force [N]
+        elif mode == "form" : 
+            print(f"Form Drag only cylinder{k+1}")
+            forcex_value = getattr(simu, forceForm_name)  # force [N]
         
         # Compute magnitude of force 
         df_force = pd.DataFrame({'zc': np.round(zc, 6), 'Fdx':  forcex_value})

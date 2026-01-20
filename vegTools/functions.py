@@ -84,7 +84,7 @@ def get_primeprime(var, z , mean_per_slice):
     Same shape as list_var
     """
     # Find unique_z which is sorted thanks to the function np.unique
-    unique_z = np.unique(z)
+    unique_z = np.unique(np.round(z,6))
 
     
     ### For each cell in the mesh, find its position in the mesh closer
@@ -218,11 +218,66 @@ def get_fdz(simu,phi, mode = 'total', D = 0.01,num_cylinder = 2, rho = 1000) :
     df_force_slice = df_force_total.groupby('zc').sum().reset_index()
 
     simu.dz_slice = get_dz_slice(simu.z, simu.V)
-    frontal_area = simu.dz_slice * D * num_cylinder  #Frontal area for all cylinders, assuming that mesh is structured on z axis
-
+    #frontal_area = simu.dz_slice * D * num_cylinder  #Frontal area for all cylinders, assuming that mesh is structured on z axis
+    #Compute Drag coefficient
+    simu.Ubar_mean = get_profiles([simu.Ubar0],simu.z , simu.V)[0]
+    Cd = df_force_slice['Fdx'] / (num_cylinder * 0.5 * rho * simu.Ubar_mean**2 * D * simu.dz_slice)
     fd_z = np.array((  df_force_slice['Fdx'] * 2 * phi   ) / (rho * np.pi * simu.dz_slice * D**2))  #[ m²/s²]
 
     return fd_z
+
+def get_Cd(simu,phi, mode = 'total', D = 0.01,num_cylinder = 2, rho = 1000) : 
+    """
+    Given a class simu, this function computes profiles of 
+    drag force against cylinder(s) 
+    Inputs : 
+        - simu  = (OpenFoamSimu class)
+        - phi = density of vegetation
+        - (optional) mode : 
+                - total = Fdp + Fdv
+                - viscous = Fdv
+                - form = Fdp
+        - (optional) D = stem diameter
+        - (optional) num_cylinder = number of cylinders in the mesh
+        - (optional) rho = density of fluid
+    Outputs : 
+        - fdz = profile of drag force
+    """
+    df_forces_total = []  #Forces for each cylinder
+    for k in range(num_cylinder): 
+        # Read mesh at cylinder
+        zc = getattr(simu,f'z_cylinder_{k+1}')
+
+        #Read forces on each cylinder
+        forceForm_name = f'forceFormCylbar_cylinder_{k+1}0'  # Force on x axis
+        forceVis_name = f'forceVisCylbar_cylinder_{k+1}0'  # Force on x axis
+        
+        if mode == "total" : 
+            forcex_value = getattr(simu, forceForm_name) + getattr(simu, forceVis_name)  # force [N]
+        elif mode == "viscous" : 
+            print(f"Viscous Drag only cylinder{k+1}")
+            forcex_value = getattr(simu, forceVis_name)  # force [N]
+        elif mode == "form" : 
+            print(f"Form Drag only cylinder{k+1}")
+            forcex_value = getattr(simu, forceForm_name)  # force [N]
+        
+        # Compute magnitude of force 
+        df_force = pd.DataFrame({'zc': np.round(zc, 6), 'Fdx':  forcex_value})
+        df_forces_total.append(df_force) 
+
+
+    # Concantenate all cylinders dataFrames
+    df_force_total = pd.concat(df_forces_total)
+
+    # Sum forces on each cylinders
+    df_force_slice = df_force_total.groupby('zc').sum().reset_index()
+
+    simu.dz_slice = get_dz_slice(simu.z, simu.V)
+    #Compute Drag coefficient
+    simu.Ubar_mean = get_profiles([simu.Ubar0],simu.z , simu.V)[0]
+    Cd = df_force_slice['Fdx'] / (num_cylinder * 0.5 * rho * simu.Ubar_mean**2 * D * simu.dz_slice)
+
+    return Cd
 
 """
 Get geometric characteristic on the mesh 

@@ -229,7 +229,7 @@ def get_fdz(simu,phi, mode = 'total', D = 0.01,num_cylinder = 2, rho = 1000) :
 def get_Cd(simu,phi, mode = 'total', D = 0.01,num_cylinder = 2, rho = 1000) : 
     """
     Given a class simu, this function computes profiles of 
-    drag force against cylinder(s) 
+    drag coefficient against cylinder(s) 
     Inputs : 
         - simu  = (OpenFoamSimu class)
         - phi = density of vegetation
@@ -241,7 +241,7 @@ def get_Cd(simu,phi, mode = 'total', D = 0.01,num_cylinder = 2, rho = 1000) :
         - (optional) num_cylinder = number of cylinders in the mesh
         - (optional) rho = density of fluid
     Outputs : 
-        - fdz = profile of drag force
+        - Cd = profile of drag coefficient
     """
     df_forces_total = []  #Forces for each cylinder
     for k in range(num_cylinder): 
@@ -277,7 +277,7 @@ def get_Cd(simu,phi, mode = 'total', D = 0.01,num_cylinder = 2, rho = 1000) :
     simu.Ubar_mean = get_profiles([simu.Ubar0],simu.z , simu.V)[0]
     Cd = df_force_slice['Fdx'] / (num_cylinder * 0.5 * rho * simu.Ubar_mean**2 * D * simu.dz_slice)
 
-    return Cd
+    return np.array(Cd)
 
 """
 Get geometric characteristic on the mesh 

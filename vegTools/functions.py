@@ -523,6 +523,54 @@ def TKETanino(phiv, Rep, dv, nu=1e-6, drag_law='Etminan'):
 
     return kth
 
+
+def TKETanino2curves(phiv, Rep, dv, nu=1e-6, drag_law='Etminan'):
+    '''
+    Compute the theoretical TKE in vegetation array following Tanino and Nepf (2008)
+    And computes two models : 
+        - kth_low_phi : for sparse canopy (where lt = dv)
+        - kth_high_phi : for dense canopy (where lt = sn)
+    '''
+
+    #Compute empirical coefficients which values depend on phiv
+    try: #phiv is an array with more than 1 value
+        #Distance between cylinders
+        sn = ((np.pi/(4*phiv))**(0.5)-1)*dv
+        
+        #Sparse Canopies
+        delta = ((1.1)**2)*np.ones(len(phiv))
+        lt = dv*np.ones(len(phiv)) #lt = dv 
+        
+        #Dense canopies
+        I = np.where((dv/sn)>=1.0)
+        delta[I] = (0.88)**2
+        lt[I] = sn[I] #lt = sn 
+
+    except TypeError: #phiv is a float
+        if (dv/sn)<1.0 :
+            delta = (1.1)**2
+            lt = dv
+        else:
+            delta = (0.88)**2
+            sn = ((np.pi/(4*phiv))**(0.5)-1)*dv
+            lt = sn
+
+    if drag_law == 'Etminan':
+        #Compute drag coefficient following Etminan et al. (2017)
+        Cdp, Cdc = dragcoef_etminan(phiv, Rep)
+        Cd = Cdp
+    elif drag_law == 'Tanino':
+        Cd = dragcoef_tanino(phiv)
+    elif drag_law == 'Tinoco':
+        Cd = dragcoef_tinoco(phiv)
+    #Theoretical turbulent kinetic energy
+    #Low density (lt = d)
+    kth_low_phi = (1.1)**2 * (phiv/((1-phiv)*np.pi/2)*Cd)**(2/3)*(Rep*nu/dv)**2
+    #High density (lt = sn)
+    kth_high_phi = (0.88)**2 * ((sn/dv)*phiv/((1-phiv)*np.pi/2)*Cd)**(2/3)*(Rep*nu/dv)**2
+
+    return kth_low_phi , kth_high_phi
+
 def ustar_condefrias(phiv, Rep, dv, nu=1e-6, drag_law='Etminan', C=9.5, Cf=0.0025):
     '''
     Conde-Frias et al. (2023) law for bed friction velocity ustar

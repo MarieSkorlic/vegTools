@@ -218,7 +218,6 @@ def get_fdz(simu,phi, mode = 'total', D = 0.01,num_cylinder = 2, rho = 1000) :
     df_force_slice = df_force_total.groupby('zc').sum().reset_index()
 
     simu.dz_slice = get_dz_slice(simu.z, simu.V)
-    #frontal_area = simu.dz_slice * D * num_cylinder  #Frontal area for all cylinders, assuming that mesh is structured on z axis
     #Compute Drag coefficient
     simu.Ubar_mean = get_profiles([simu.Ubar0],simu.z , simu.V)[0]
     Cd = df_force_slice['Fdx'] / (num_cylinder * 0.5 * rho * simu.Ubar_mean**2 * D * simu.dz_slice)
@@ -464,6 +463,15 @@ def read_description(PATH_description,cases) :
         info["title"] = ""
     
     return info
+
+
+def read_description_df(PATH_description):
+    """
+    Read only once the file 'Description.ods'
+    """
+    df = pd.read_excel(PATH_description + "/Description.ods")
+    df = df.fillna('') #Replace NaN by ''
+    return df
 
 """
 Import functions from veg_relations

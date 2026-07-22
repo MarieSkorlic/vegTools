@@ -1,11 +1,9 @@
 """Class to load post processed data from a simulation
 =====================================================================
 
-.. autoclass:: OpenFoamSimu
+.. autoclass:: simuPostPro
 
-.. automethod:: OpenFoamSimu.keys
-
-.. automethod:: OpenFoamSimu.readopenfoam
+.. automethod:: simuPostPro.keys
 
 """
 
@@ -13,7 +11,7 @@ import os, sys
 import subprocess
 import numpy as np
 from fluidfoam import readmesh, readfield, OpenFoamFile, readscalar , readvector , readsymmtensor
-from vegTools.functions import get_profiles, get_dz_slice,get_fdz, read_description,get_primeprime
+from vegTools.functions import get_profiles, get_dz_slice,get_fdz,get_Cd, read_description,get_primeprime
 from mathtools import derivate_wall
 import netCDF4 as nc
 from pathlib import Path
@@ -91,7 +89,7 @@ class simuPostPro(object):
         filenamePostPro = 'fieldsPostPro.nc'
         filenameRawData = 'fields.nc'
         if not os.path.exists(self.directory + '/' + filenamePostPro) :
-            # If raw data has not been extracted through 
+            # If raw data has not been extracted
             if not os.path.exists(self.directory + '/' + filenameRawData) :
                 #Read Mesh 
                 self.readmesh(structured=structured, precision=precision,boundary = boundary,
@@ -130,8 +128,20 @@ class simuPostPro(object):
                 self.readNetCDF(filename=filenamePostPro)
         else : 
             self.readNetCDF(filename=filenamePostPro)
+     
+    def add_variable(self, name, value):
 
-            
+        python_name = name.replace('.', '_').replace('Mean','bar').replace(':','_')
+        #Python attribute
+        setattr(self, python_name, value)
+
+        #OpenFoam attribute 
+        if python_name != name:
+            setattr(self, name, value)
+
+        #Add attribute only if not in self.variables
+        if python_name not in self.variables:
+            self.variables.append(python_name)
 
     def compute_simulations_data(self) :
         PATH_description = str(Path(self.directory).parent)
@@ -158,26 +168,29 @@ class simuPostPro(object):
         
         #Compute TKE_profile (obligé car pas dans simu.variables)
         Uprime2 , Vprime2 , Wprime2 = get_profiles([self.UUbar - self.Ubar0 * self.Ubar0 , 
-                                                                   self.VVbar - self.Ubar1 * self.Ubar1 , 
-                                                                   self.WWbar - self.Ubar2 * self.Ubar2],
-                                                                   self.z , self.V)
-        #Resolved TKE
-        k_resol = (1/2) * (Uprime2 + Vprime2 + Wprime2)
-        self.profiles['k_resol'] = k_resol
+                                                    self.VVbar - self.Ubar1 * self.Ubar1 , 
+                                                    self.WWbar - self.Ubar2 * self.Ubar2],
+                                                    self.z , self.V)
         
-        #SGS TKE
-        k_SGS = get_profiles([self.turbulenceProperties_kbar] , self.z , self.V)[0]
-        self.profiles['k_SGS'] = k_SGS
+        
+        if hasattr(self , 'turbulenceProperties_kbar') :  # if no SGS TKE do not compute TKE at all 
+            #Resolved TKE
+            k_resol = (1/2) * (Uprime2 + Vprime2 + Wprime2)
+            self.profiles['k_resol'] = k_resol
+            
+            #SGS TKE
+            k_SGS = get_profiles([self.turbulenceProperties_kbar] , self.z , self.V)[0]
+            self.profiles['k_SGS'] = k_SGS
 
-        #Total TKE
-        k_tot = k_resol + k_SGS
-        self.profiles['k_tot'] = k_tot
+            #Total TKE
+            k_tot = k_resol + k_SGS
+            self.profiles['k_tot'] = k_tot
 
         # DKE
         DKE = (0.5) * (
-                         get_profiles([self.Ubar0 * self.Ubar0],self.z,self.V)[0] - self.profiles['Ubar_mean'] * self.profiles['Ubar_mean']
-                       + get_profiles([self.Ubar1 * self.Ubar1],self.z,self.V)[0] - self.profiles['Vbar_mean'] * self.profiles['Vbar_mean']
-                       + get_profiles([self.Ubar2 * self.Ubar2],self.z,self.V)[0] - self.profiles['Wbar_mean'] * self.profiles['Wbar_mean'])
+                        get_profiles([self.Ubar0 * self.Ubar0],self.z,self.V)[0] - self.profiles['Ubar_mean'] * self.profiles['Ubar_mean']
+                    + get_profiles([self.Ubar1 * self.Ubar1],self.z,self.V)[0] - self.profiles['Vbar_mean'] * self.profiles['Vbar_mean']
+                    + get_profiles([self.Ubar2 * self.Ubar2],self.z,self.V)[0] - self.profiles['Wbar_mean'] * self.profiles['Wbar_mean'])
         self.profiles['DKE'] = DKE
 
 
@@ -189,6 +202,10 @@ class simuPostPro(object):
         fdz = get_fdz(self,self.phi,'total')
         self.profiles['fdz'] = fdz
 
+        # Drag coefficient
+        Cd = get_Cd(self,self.phi)
+        self.profiles['Cd'] = Cd
+
 
     def compute_profiles_stresses(self , rho = 1000 , nu = 1e-6) :
         # ---- Viscous Stress [Pa]
@@ -197,158 +214,161 @@ class simuPostPro(object):
         self.profiles['viscous_stress'] = viscous_stress
 
         # ---- Reynolds Stress [Pa]
-        reynolds_stress_SGS = rho * get_profiles([- self.turbulenceProperties_Rbar2] , self.z , self.V)[0]
-        self.profiles['reynolds_stress_SGS'] = reynolds_stress_SGS
-        #Resolved reynolds stresses = - <bar{u'w'}> = - ( <bar{uw}> - <bar{u}> * <bar{w}>  )
-        reynolds_stress_resol = - rho * get_profiles([self.UWbar - self.Ubar0 * self.Ubar2],self.z , self.V)[0]
-        self.profiles['reynolds_stress_resol'] = reynolds_stress_resol
-        #Total Reynolds Stress 
-        reynolds_stress = + reynolds_stress_resol + reynolds_stress_SGS
-        self.profiles['reynolds_stress'] = reynolds_stress
+        if hasattr(self, 'turbulenceProperties_kbar') :  # if no SGS Reynolds Stress do not compute Reynolds stress at all 
+            reynolds_stress_SGS = rho * get_profiles([- self.turbulenceProperties_Rbar2] , self.z , self.V)[0]
+            self.profiles['reynolds_stress_SGS'] = reynolds_stress_SGS
+            #Resolved reynolds stresses = - <bar{u'w'}> = - ( <bar{uw}> - <bar{u}> * <bar{w}>  )
+            reynolds_stress_resol = - rho * get_profiles([self.UWbar - self.Ubar0 * self.Ubar2],self.z , self.V)[0]
+            self.profiles['reynolds_stress_resol'] = reynolds_stress_resol
+            #Total Reynolds Stress 
+            reynolds_stress = + reynolds_stress_resol + reynolds_stress_SGS
+            self.profiles['reynolds_stress'] = reynolds_stress
         # ---- Dispersive stress [Pa]  (- <bar{u}''bar{w}''> = -(<bar{u}bar{w}> - <bar{u}><bar{w}>) )
         Ubar_Wbar_mean, Ubar_mean, Wbar_mean = get_profiles([self.Ubar0 * self.Ubar2 , self.Ubar0 , self.Ubar2],self.z , self.V)
         disp_stress = - rho * (Ubar_Wbar_mean - Ubar_mean * Wbar_mean)
         self.profiles['disp_stress'] = disp_stress
 
     def compute_profiles_TKE(self , rho = 1000 , nu = 1e-6) :
-        unique_z = np.unique(np.round(self.z , 6))
+        if hasattr(self , 'turbulenceProperties_Rbar0') : 
+            unique_z = np.unique(np.round(self.z , 6))
 
-        # ---- Production term 
-        # - Shear production
-        Rxz_resol = get_profiles([self.UWbar - self.Ubar0 * self.Ubar2],self.z , self.V)[0]
-        Rxz_SGS =  get_profiles([self.turbulenceProperties_Rbar2] , self.z , self.V)[0]
-        Rxz_tot = Rxz_resol + Rxz_SGS
+            # ---- Production term 
+            # - Shear production
+            Rxz_resol = get_profiles([self.UWbar - self.Ubar0 * self.Ubar2],self.z , self.V)[0]
+            Rxz_SGS =  get_profiles([self.turbulenceProperties_Rbar2] , self.z , self.V)[0]
+            Rxz_tot = Rxz_resol + Rxz_SGS
 
-        gradUbar_mean = get_profiles([self.grad_Ubar6],self.z , self.V)[0]
-        Ps = - self.phif * (Rxz_tot * gradUbar_mean)
-        self.profiles['Ps'] = Ps
+            gradUbar_mean = get_profiles([self.grad_Ubar6],self.z , self.V)[0]
+            Ps = - self.phif * (Rxz_tot * gradUbar_mean)
+            self.profiles['Ps'] = Ps
 
-        # - Wake production
-        Rij = [ (self.UUbar - self.Ubar0 * self.Ubar0) + self.turbulenceProperties_Rbar0 , (self.UVbar - self.Ubar0 * self.Ubar1) + self.turbulenceProperties_Rbar1 , (self.UWbar - self.Ubar0 * self.Ubar2) + self.turbulenceProperties_Rbar2 ,
-                    (self.UVbar - self.Ubar0 * self.Ubar1) + self.turbulenceProperties_Rbar1 , (self.VVbar - self.Ubar1 * self.Ubar1) + self.turbulenceProperties_Rbar3  , (self.VWbar - self.Ubar1 * self.Ubar2) + self.turbulenceProperties_Rbar4,
-                    (self.UWbar - self.Ubar0 * self.Ubar2) + self.turbulenceProperties_Rbar2 , (self.VWbar - self.Ubar1 * self.Ubar2) + self.turbulenceProperties_Rbar4, (self.WWbar - self.Ubar2 * self.Ubar2) + self.turbulenceProperties_Rbar5 ]
+            # - Wake production
+            Rij = [ (self.UUbar - self.Ubar0 * self.Ubar0) + self.turbulenceProperties_Rbar0 , (self.UVbar - self.Ubar0 * self.Ubar1) + self.turbulenceProperties_Rbar1 , (self.UWbar - self.Ubar0 * self.Ubar2) + self.turbulenceProperties_Rbar2 ,
+                        (self.UVbar - self.Ubar0 * self.Ubar1) + self.turbulenceProperties_Rbar1 , (self.VVbar - self.Ubar1 * self.Ubar1) + self.turbulenceProperties_Rbar3  , (self.VWbar - self.Ubar1 * self.Ubar2) + self.turbulenceProperties_Rbar4,
+                        (self.UWbar - self.Ubar0 * self.Ubar2) + self.turbulenceProperties_Rbar2 , (self.VWbar - self.Ubar1 * self.Ubar2) + self.turbulenceProperties_Rbar4, (self.WWbar - self.Ubar2 * self.Ubar2) + self.turbulenceProperties_Rbar5 ]
 
-        Rijgrad = np.multiply(Rij ,
-                [
-                self.grad_Ubar0 , self.grad_Ubar3 , self.grad_Ubar6,
-                self.grad_Ubar1 , self.grad_Ubar4 , self.grad_Ubar7,
-                self.grad_Ubar2 , self.grad_Ubar5 , self.grad_Ubar8
-                ])
+            Rijgrad = np.multiply(Rij ,
+                    [
+                    self.grad_Ubar0 , self.grad_Ubar3 , self.grad_Ubar6,
+                    self.grad_Ubar1 , self.grad_Ubar4 , self.grad_Ubar7,
+                    self.grad_Ubar2 , self.grad_Ubar5 , self.grad_Ubar8
+                    ])
 
-        Rijgrad = np.sum(Rijgrad , axis = 0)
-        Rijgrad = get_profiles([Rijgrad] , self.z , self.V)[0]
+            Rijgrad = np.sum(Rijgrad , axis = 0)
+            Rijgrad = get_profiles([Rijgrad] , self.z , self.V)[0]
 
-        Pw = -self.phif * ( Rijgrad - 
-                            get_profiles([self.UWbar - self.Ubar0 * self.Ubar2],self.z, self.V)[0] 
-                            * get_profiles([self.grad_Ubar6],self.z,self.V)[0]  
-                            ) 
-        self.profiles['Pw'] = Pw
-        
+            Pw = -self.phif * ( Rijgrad - 
+                                get_profiles([self.UWbar - self.Ubar0 * self.Ubar2],self.z, self.V)[0] 
+                                * get_profiles([self.grad_Ubar6],self.z,self.V)[0]  
+                                ) 
+            self.profiles['Pw'] = Pw
+            
 
-        # ---- Dissipation 
-        epsilonP1_bar_mean = nu * get_profiles([self.epsilonP1bar] , self.z , self.V)[0]
-        epsilonP2_bar_mean = - nu * (get_profiles([self.grad_Ubar6],self.z , self.V)[0] * 
-                                        get_profiles([self.grad_Ubar6] , self.z , self.V)[0])
+            # ---- Dissipation 
+            epsilonP1_bar_mean = nu * get_profiles([self.epsilonP1bar] , self.z , self.V)[0]
+            epsilonP2_bar_mean = - nu * (get_profiles([self.grad_Ubar6],self.z , self.V)[0] * 
+                                            get_profiles([self.grad_Ubar6] , self.z , self.V)[0])
 
-        
-        # SGS dissipation < \overline{nut * Sij * Sij} > 
-        epsSGS = get_profiles([self.epsilonSGSbar], self.z , self.V)[0]
-        self.profiles['epsSGS'] = epsSGS 
-        # Resolved dissipation
-        epsilon_resol = self.phif * (epsilonP1_bar_mean + epsilonP2_bar_mean)
-        self.profiles['epsilon_resol'] = epsilon_resol
-        # Total dissipation 
-        epsilon_tot = self.phif * (epsilonP1_bar_mean + epsilonP2_bar_mean + epsSGS)
-        self.profiles['epsilon_tot'] = epsilon_tot
-
-
-
-        # ---- Transport term
-        #Transport term with fulcutating pressure  
-        Tp = - self.phif *  derivate_wall( 
-                                                unique_z ,
-                                                get_profiles([self.pWbar - self.pbar * self.Ubar2], 
-                                                self.z , self.V)[0]
-                                                )
-        self.profiles['Tp'] = Tp
+            
+            # SGS dissipation < \overline{nut * Sij * Sij} > 
+            epsSGS = get_profiles([self.epsilonSGSbar], self.z , self.V)[0]
+            self.profiles['epsSGS'] = epsSGS 
+            # Resolved dissipation
+            epsilon_resol = self.phif * (epsilonP1_bar_mean + epsilonP2_bar_mean)
+            self.profiles['epsilon_resol'] = epsilon_resol
+            # Total dissipation 
+            epsilon_tot = self.phif * (epsilonP1_bar_mean + epsilonP2_bar_mean + epsSGS)
+            self.profiles['epsilon_tot'] = epsilon_tot
 
 
-        # # Transport term with fluctuating velocity
-        ## -- ## 
-        T1 = 2 * (
-            self.Ubar0**2
-            + self.Ubar1**2
-            + self.Ubar2**2
-        ) * self.Ubar2
+
+            # ---- Transport term
+            #Transport term with fulcutating pressure  
+            Tp = - self.phif *  derivate_wall( 
+                                                    unique_z ,
+                                                    get_profiles([self.pWbar - self.pbar * self.Ubar2], 
+                                                    self.z , self.V)[0]
+                                                    )
+            self.profiles['Tp'] = Tp
 
 
-        T2 = (
-            self.UUWbar  # u u w
-            + self.VVWbar  # v v w
-            + self.WWWbar  # w w w
-            )
-
-
-        T3 = - 2 * (
-            self.UWbar * self.Ubar0
-            + self.VWbar * self.Ubar1
-            + self.WWbar * self.Ubar2
-            )
-
-
-        T4 = - (
-            self.UUbar
-            + self.VVbar
-            + self.WWbar
+            # # Transport term with fluctuating velocity
+            ## -- ## 
+            T1 = 2 * (
+                self.Ubar0**2
+                + self.Ubar1**2
+                + self.Ubar2**2
             ) * self.Ubar2
 
 
-        ## -- ##
-        UiUiW_prime = T1 + T2 + T3 + T4
-        UiUiW_prime = get_profiles([UiUiW_prime], self.z, self.V)[0]
-
-        Tv = - self.phif *  derivate_wall(
-            unique_z,
-            0.5 * (UiUiW_prime)
-            )
-        self.profiles['Tv'] = Tv
-
-        # TKE transport by molecular diffusion
-        k_SGS = get_profiles([self.turbulenceProperties_kbar] , self.z , self.V)[0]
-        Uprime2 , Vprime2 , Wprime2 = get_profiles([self.UUbar - self.Ubar0 * self.Ubar0 , self.VVbar - self.Ubar1 * self.Ubar1 , self.WWbar - self.Ubar2 * self.Ubar2],self.z , self.V)
-        k_resol = (1/2) * (Uprime2 + Vprime2 + Wprime2)
-        k_tot = k_resol + k_SGS
-
-        Tnu = self.phif * nu * derivate_wall(unique_z,derivate_wall(unique_z,k_tot))
-        self.profiles['Tnu'] = Tnu 
+            T2 = (
+                self.UUWbar  # u u w
+                + self.VVWbar  # v v w
+                + self.WWWbar  # w w w
+                )
 
 
-        #TKE transport by spatial flucutation of velocity
-        Wbar_mean = get_profiles([self.Ubar2] , self.z , self.V)[0]
-        Wbar_primeprime = get_primeprime(self.Ubar2 , self.z, Wbar_mean)
-        UprimeUprime = self.UUbar - self.Ubar0 * self.Ubar0 + self.turbulenceProperties_Rbar0
-        VprimeVprime = self.VVbar - self.Ubar1 * self.Ubar1 + self.turbulenceProperties_Rbar3
-        WprimeWprime = self.WWbar - self.Ubar2 * self.Ubar2 + self.turbulenceProperties_Rbar5
+            T3 = - 2 * (
+                self.UWbar * self.Ubar0
+                + self.VWbar * self.Ubar1
+                + self.WWbar * self.Ubar2
+                )
 
-        Td = (0.5) * get_profiles([
-                                          UprimeUprime * Wbar_primeprime
-                                        + VprimeVprime * Wbar_primeprime
-                                        + WprimeWprime * Wbar_primeprime],
-                                        self.z , self.V)[0]
+
+            T4 = - (
+                self.UUbar
+                + self.VVbar
+                + self.WWbar
+                ) * self.Ubar2
+
+
+            ## -- ##
+            UiUiW_prime = T1 + T2 + T3 + T4
+            UiUiW_prime = get_profiles([UiUiW_prime], self.z, self.V)[0]
+
+            Tv = - self.phif *  derivate_wall(
+                unique_z,
+                0.5 * (UiUiW_prime)
+                )
+            self.profiles['Tv'] = Tv
+
+            # TKE transport by molecular diffusion
+            k_SGS = get_profiles([self.turbulenceProperties_kbar] , self.z , self.V)[0]
+            Uprime2 , Vprime2 , Wprime2 = get_profiles([self.UUbar - self.Ubar0 * self.Ubar0 , self.VVbar - self.Ubar1 * self.Ubar1 , self.WWbar - self.Ubar2 * self.Ubar2],self.z , self.V)
+            k_resol = (1/2) * (Uprime2 + Vprime2 + Wprime2)
+            k_tot = k_resol + k_SGS
+
+            Tnu = self.phif * nu * derivate_wall(unique_z,derivate_wall(unique_z,k_tot))
+            self.profiles['Tnu'] = Tnu 
+
+
+            #TKE transport by spatial flucutation of velocity
+            Wbar_mean = get_profiles([self.Ubar2] , self.z , self.V)[0]
+            Wbar_primeprime = get_primeprime(self.Ubar2 , self.z, Wbar_mean)
+            UprimeUprime = self.UUbar - self.Ubar0 * self.Ubar0 + self.turbulenceProperties_Rbar0
+            VprimeVprime = self.VVbar - self.Ubar1 * self.Ubar1 + self.turbulenceProperties_Rbar3
+            WprimeWprime = self.WWbar - self.Ubar2 * self.Ubar2 + self.turbulenceProperties_Rbar5
+
+            Td = (0.5) * get_profiles([
+                                            UprimeUprime * Wbar_primeprime
+                                            + VprimeVprime * Wbar_primeprime
+                                            + WprimeWprime * Wbar_primeprime],
+                                            self.z , self.V)[0]
+            
         
-    
-        Td = -self.phif * derivate_wall(unique_z,Td)
-        self.profiles['Td'] = Td
+            Td = -self.phif * derivate_wall(unique_z,Td)
+            self.profiles['Td'] = Td
 
-        # Total transport term 
-        T = (Tp + Tv + Tnu + Td)
-        self.profiles['T'] = T 
+            # Total transport term 
+            T = (Tp + Tv + Tnu + Td)
+            self.profiles['T'] = T 
 
-        totalTKE = (Ps + Pw + T - epsilon_tot)
-        self.profiles['totalTKE'] = totalTKE
+            totalTKE = (Ps + Pw + T - epsilon_tot)
+            self.profiles['totalTKE'] = totalTKE
 
 
-    def compute_profiles_DKE(self , rho = 1000 , nu = 1e-6) : 
+    def compute_profiles_DKE(self , rho = 1000 , nu = 1e-6) :
+        # if hasattr(self , 'turbulenceProperties_Rbar0') : 
         unique_z = np.unique(np.round(self.z , 6))
         # ---- Production term
         # - Shear production 
@@ -389,10 +409,14 @@ class simuPostPro(object):
         Vprimeprime = get_primeprime(self.Ubar1 , self.z , Vbar_mean)
         Wprimeprime = get_primeprime(self.Ubar2 , self.z , Wbar_mean)
 
-
-        Rxz = ((self.UWbar - self.Ubar0 * self.Ubar2) + self.turbulenceProperties_Rbar2)
-        Ryz = ((self.VWbar - self.Ubar1 * self.Ubar2) + self.turbulenceProperties_Rbar4)
-        Rzz = ((self.WWbar - self.Ubar2 * self.Ubar2) + self.turbulenceProperties_Rbar5)
+        if hasattr(self, 'self.turbulenceProperties_Rbar2') : 
+            Rxz = ((self.UWbar - self.Ubar0 * self.Ubar2) + self.turbulenceProperties_Rbar2)
+            Ryz = ((self.VWbar - self.Ubar1 * self.Ubar2) + self.turbulenceProperties_Rbar4)
+            Rzz = ((self.WWbar - self.Ubar2 * self.Ubar2) + self.turbulenceProperties_Rbar5)
+        else : 
+            Rxz = ((self.UWbar - self.Ubar0 * self.Ubar2))
+            Ryz = ((self.VWbar - self.Ubar1 * self.Ubar2))
+            Rzz = ((self.WWbar - self.Ubar2 * self.Ubar2))
 
         Tvpp = (Rxz * Uprimeprime 
                     + Ryz * Vprimeprime 
@@ -439,24 +463,28 @@ class simuPostPro(object):
         totalDKE = (Pspp + Pppp + Tpp - epsilonpp - self.profiles['Pw'])
         self.profiles['totalDKE'] = totalDKE
 
-
     def compute_macroscopic_quantities(self) : 
-        #TKE
-        TKE_per_cell = (1./2.) * ((
-                                    (self.U0 - self.Ubar0)**2 + 
-                                    (self.U1 - self.Ubar1)**2 + 
-                                    (self.U2 - self.Ubar2)**2 ) 
-                                    + self.turbulenceProperties_kbar)
-        self.k_brack = np.sum(TKE_per_cell * self.V) / np.sum(self.V)
+        if hasattr(self, 'turbulenceProperties_kbar') : 
+            #TKE
+            TKE_per_cell = (1./2.) * ((
+                                        (self.U0 - self.Ubar0)**2 + 
+                                        (self.U1 - self.Ubar1)**2 + 
+                                        (self.U2 - self.Ubar2)**2 ) 
+                                        + self.turbulenceProperties_kbar)
+            self.k_brack = np.sum(TKE_per_cell * self.V) / np.sum(self.V)
 
 
-        self.q25TKE = np.quantile(np.sqrt(TKE_per_cell), 0.25, 
+            self.q25TKE = np.quantile(np.sqrt(TKE_per_cell), 0.25, 
+                                method = 'inverted_cdf',
+                                weights = self.V)
+
+            self.q75TKE = np.quantile(np.sqrt(TKE_per_cell), 0.75, 
                             method = 'inverted_cdf',
                             weights = self.V)
-
-        self.q75TKE = np.quantile(np.sqrt(TKE_per_cell), 0.75, 
-                        method = 'inverted_cdf',
-                        weights = self.V)
+        else : 
+            self.k_brack = 0 
+            self.q25TKE = 0 
+            self.q75TKE = 0 
 
 
         #u*
@@ -479,7 +507,6 @@ class simuPostPro(object):
                                 method = 'inverted_cdf',
                                 weights = dS_bottom)
 
-
     def writeNetCDFPostPro(self,boundary):
         filename = "fieldsPostPro.nc"
         filepath = os.path.join(self.directory, filename)
@@ -488,27 +515,6 @@ class simuPostPro(object):
             ds.createDimension('unique_z', len(np.unique(np.round(self.z,6))))
             for bound in boundary : 
                 ds.createDimension(f'dim_{bound}', len(getattr(self,f'x_{bound}')))
-
-
-            
-            # # --- Mesh on boundaries --- # 
-            # for bound in boundary : 
-            #     namex = f'x_{bound}'
-            #     namey = f'y_{bound}'
-            #     namez = f'z_{bound}'
-            #     for coord in [namex , namey , namez] :
-            #             var = ds.createVariable(coord, 'f8',(f'dim_{bound}'))
-            #             var[:] = getattr(self,coord)
-            
-            # # --- Data on boundaries --- # 
-            # print(f'###### {ds.variables.keys()}')
-            # for bound in boundary : 
-            #     for var in self.variables : 
-            #         if (f'{bound}' in var 
-            #             and len(getattr(self,var)) == len(getattr(self,f'x_{bound}'))
-            #             and var not in [f'x_{bound}',f'y_{bound}',f'z_{bound}'] ): 
-            #             var_bound = ds.createVariable(var,'f8',(f'dim_{bound}',))
-            #             var_bound[:] = getattr(self,var)
 
             
 
@@ -540,8 +546,6 @@ class simuPostPro(object):
 
 
         print("Done writing NetCDF for PostProcessed Data")
-
-
 
     def readNetCDF(self,filename): 
         ncfile = nc.Dataset(self.directory + filename , "r" , format="NETCDF4")

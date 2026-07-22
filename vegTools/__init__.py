@@ -31,3 +31,9 @@ Import functions from veg_relations
 """
 
 from vegTools.functions import dragcoef_etminan , dragcoef_tanino , dragcoef_tinoco, TKETanino, TKETanino2curves, ustar_condefrias, ustar_etminan, ustar_yang , get_gradP_veg
+
+
+"""
+Layout graphs
+"""
+from vegTools.functions import modif_Rep , dict_color_map

@@ -573,9 +573,10 @@ def TKETanino2curves(phiv, Rep, dv, nu=1e-6, drag_law='Etminan'):
         Cd = dragcoef_tinoco(phiv)
     #Theoretical turbulent kinetic energy
     #Low density (lt = d)
-    kth_low_phi = (1.1)**2 * (phiv/((1-phiv)*np.pi/2)*Cd)**(2/3)*(Rep*nu/dv)**2
+    ### WARNING : 0.9 * Cd to take into account for form drag only and not total drag 
+    kth_low_phi = (1.1)**2 * (phiv/((1-phiv)*np.pi/2)*0.9 * Cd)**(2/3)*(Rep*nu/dv)**2 
     #High density (lt = sn)
-    kth_high_phi = (0.88)**2 * ((sn/dv)*phiv/((1-phiv)*np.pi/2)*Cd)**(2/3)*(Rep*nu/dv)**2
+    kth_high_phi = (0.88)**2 * ((sn/dv)*phiv/((1-phiv)*np.pi/2)*0.9 * Cd)**(2/3)*(Rep*nu/dv)**2
 
     return kth_low_phi , kth_high_phi
 
@@ -589,7 +590,49 @@ def ustar_condefrias(phiv, Rep, dv, nu=1e-6, drag_law='Etminan', C=9.5, Cf=0.002
     ustar = np.maximum(C*(kth/Rep)**(0.5), Cf**(0.5)*Rep*nu/dv)
     return ustar
 
-def ustar_etminan(phiv, Rep, dv, nu=1e-6, drag_law='Etminan', C=5.15):
+def ustar_etminan(phiv, Rep, dv, nu=1e-6, drag_law='Etminan', C=5.15 , ncurves = 1):
+    '''
+    Etminan et al. (2018) law for bed friction velocity ustar
+
+    Inputs : 
+        - ncurves = 1 or 2 depending if we want to plot the two regimes
+    '''
+    if ncurves  not in [1,2]: 
+        raise ValueError(f'Number of curves must be 1 or 2')
+
+
+    #Theoretical turbulent kinetic energy according to Tanino and Nepf (2008)
+    if ncurves == 1 :  
+        kth = TKETanino(phiv, Rep, dv, nu, drag_law)
+    else : 
+        k_d  = TKETanino2curves(phiv, Rep, dv, nu, drag_law='Etminan')[0]
+        k_sn = TKETanino2curves(phiv, Rep, dv, nu, drag_law='Etminan')[1]
+        kth = [k_d,k_sn]
+    
+    #Compute drag coefficient
+    if drag_law == 'Etminan':
+        #Compute drag coefficient following Etminan et al. (2017)
+        Cdp, Cdc = dragcoef_etminan(phiv, Rep)
+    elif drag_law == 'Tanino':
+        Cd = dragcoef_tanino(phiv)
+        Cdc = Cd
+    #Constriction Velocity
+    coef = (1-phiv)/(1-(2*phiv/np.pi)**(0.5))
+    Rec = Rep*coef
+    Uc = Rec*nu/dv
+    Up = Rep*nu/dv
+    #frontal area
+    a = phiv/(np.pi/4*dv)
+    #Height of the boundary layer
+    Hv = C*np.sqrt(np.multiply(nu,kth)/(Cdc*a*Uc**3))
+    ReHv = Up*Hv/nu
+    #friction velocity
+    ustar = np.sqrt(2/ReHv)*Up
+
+    return ustar
+
+
+def ustar_etminan2(phiv, Rep, dv, nu=1e-6, drag_law='Etminan', C=5.15):
     '''
     Etminan et al. (2018) law for bed friction velocity ustar
     '''
@@ -616,6 +659,7 @@ def ustar_etminan(phiv, Rep, dv, nu=1e-6, drag_law='Etminan', C=5.15):
     #friction velocity
     ustar = np.sqrt(2/ReHv)*Up
     return ustar
+
 
 def ustar_yang(phiv, Rep, dv, nu=1e-6, Cf=0.0025):
     '''
@@ -650,3 +694,33 @@ def get_gradP_veg(phiv, Rep, dv, nu=1e-6, rhof=1000, drag_law='Etminan'):
     gradP = phiv*Kv*Up
 
     return gradP
+
+
+"""
+Layout graphs
+"""
+
+def modif_Rep(simu,Reps = [500,1000,1500],atol = 100) : 
+    """
+    Rep are computed using the integral of velocity, to avoid correspondance problems
+    with DataFrames, Rep are changed to the nearest Rep from the list Reps
+    Inputs : 
+        - simu : class OpenFoamSimu
+        - Reps : array of Reynolds numbers used in simulations
+        - atol : absolute tolerance
+    """
+    for Rep in Reps : 
+        if np.isclose(simu.Rep,Rep , atol = atol) : 
+            return(Rep)
+
+def dict_color_map(Reps = [500 , 1000 , 1500] , colors = ['#75D054FF', '#3B528BFF','#440154FF']) : 
+    """
+    Function which assosicate a color to each value of Rep
+    """
+    if len(Reps) != len(colors) : 
+        raise ValueError(f'Reps and colors list must be the same dimension')
+
+    color_map = {
+        Rep: colors[i] for i,Rep in enumerate(Reps)
+    }
+    return color_map

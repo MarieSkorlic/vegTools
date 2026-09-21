@@ -150,7 +150,7 @@ def get_mean_profiles_x_structured(list_var, x, V):
 
     Inputs:
     - list_var: list of arrays to compute the mean (e.g., velocity components)
-    - x: array of z-coordinates of each cell with readmesh of fluidfoam
+    - x: array of x-coordinates of each cell with readmesh of fluidfoam
     - V: array of cell volumes with writeCellVolumes of openfoam
 
     Outputs:

@@ -463,7 +463,8 @@ class simuPostPro(object):
         totalDKE = (Pspp + Pppp + Tpp - epsilonpp - self.profiles['Pw'])
         self.profiles['totalDKE'] = totalDKE
 
-    def compute_macroscopic_quantities(self) : 
+    def compute_macroscopic_quantities(self, D = 0.01) :
+        unique_z = np.unique(np.round(self.z , 6)) 
         if hasattr(self, 'turbulenceProperties_kbar') : 
             #TKE
             TKE_per_cell = (1./2.) * ((
@@ -471,7 +472,7 @@ class simuPostPro(object):
                                         (self.U1 - self.Ubar1)**2 + 
                                         (self.U2 - self.Ubar2)**2 ) 
                                         + self.turbulenceProperties_kbar)
-            self.k_brack = np.sum(TKE_per_cell * self.V) / np.sum(self.V)
+            self.k_brack = np.sum(TKE_per_cell * self.V, where = self.z/D > 1) / np.sum(self.V, where = self.z/D > 1)
 
 
             self.q25TKE = np.quantile(np.sqrt(TKE_per_cell), 0.25, 

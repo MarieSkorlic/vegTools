@@ -78,6 +78,7 @@ class simuPostPro(object):
                 self.directory += '/'
         
         if deletefile : 
+            #If deletefile == True , remove 'fieldsPostPro.nc'
             os.system(f'rm -r {self.directory}fieldsPostPro.nc')
         
         

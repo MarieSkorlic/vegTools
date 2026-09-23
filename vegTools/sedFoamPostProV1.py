@@ -27,7 +27,6 @@ import numpy as np
 import fluidfoam
 from tqdm import tqdm
 import h5py
-import os, sys
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -690,76 +689,65 @@ class ThreedimSqrsimu(object):
 # extract the entire domain
 #
 class Threedimsimu(object):
-    def __init__(self,path = None ,simu = None,asint = 0.60, delete_mesh = False, FolderSaveFiles = 'constant'):
+    def __init__(self, path = None, case = None ,simu = None, read_point_nc, save_point_nc, read_mesh, read_result, asint):
+        self.basepath = basepath
+        self.case = case
+        self.sol = self.basepath + self.case + "/"
+        self.solsav = self.basepath + self.case + "/constant"
+        self.asint = asint      # Solid volume fraction criteria
+        self.read_point_nc = read_point_nc
+        self.save_point_nc = save_point_nc
         
-        self.FolderSaveFiles = FolderSaveFiles
-        
-        if path == None and simu == None:
-                # If nothing if given, consider the current directory as the 
-                # simulation to load
-                self.directory = os.getcwd()+'/'
-                self.simu = os.getcwd().split('/')[-1]
-                path = './'
+        self.createmesh(read_mesh, read_result)
 
-        elif simu == None:
-                # If only path is provided, consider all subfolders as possible
-                # simulations to load
-                self.directory = self._choose_simulation(path)
-                self.simu = self.directory.split("/")[-2]
-                path = './'
-        
-        else:
-            # If path and simu are provided, consider the given directory
-            # as the simulation to load
-            self.simu = simu
-            if path.endswith('/') is False:
-                path += '/'
-            self.directory = path + simu
+    if path == None and simu == None:
+            # If nothing if given, consider the current directory as the 
+            # simulation to load
+            self.directory = os.getcwd()+'/'
+            self.simu = os.getcwd().split('/')[-1]
+            path = './'
 
-            if self.directory.endswith('/') is False: 
-                self.directory += '/'
-        
-        if delete_mesh and os.path.exists(self.directory + self.FolderSaveFiles +'/read_mesh.h5'): 
-            #If deletefile == True , remove 'read_mesh.h5'
-            print('Deleting the mesh file')
-            os.system(f'rm -r {self.directory}{self.FolderSaveFiles}/read_mesh.h5')
-        
-        #Use createmesh function
-        self.createmesh()
+    elif simu == None:
+            # If only path is provided, consider all subfolders as possible
+            # simulations to load
+            self.directory = self._choose_simulation(path)
+            self.simu = self.directory.split("/")[-2]
+            path = './'
+    
+    else:
+        # If path and simu are provided, consider the given directory
+        # as the simulation to load
+        self.simu = simu
+        if path.endswith('/') is False:
+            path += '/'
+        self.directory = path + simu
 
+        if self.directory.endswith('/') is False: 
+            self.directory += '/'
 
 
-    def createmesh(self):
-        if not os.path.exists(self.directory + self.FolderSaveFiles + '/pointerpostproc.nc'):
-            # If 'pointerpostproc.nc' does not exist --> write and save it
-            Xb, Yb, Zb = fluidfoam.readmesh(self.directory, precision = 13)
-            hf = h5py.File(self.directory + self.FolderSaveFiles +'/pointerpostproc.nc', 'w')
+
+    def createmesh(self, read_mesh, read_result):
+        if not read_mesh:
+            Xb, Yb, Zb = fluidfoam.readmesh(self.sol, precision = 13)
+            hf = h5py.File(self.solsav+'/read_mesh.h5', 'w')
             hf.create_dataset('Xb',data=Xb)
             hf.create_dataset('Yb',data=Yb)
             hf.create_dataset('Zb',data=Zb)
             hf.close()
-            n2d, nz, pbed, pointer = create_point_2Dcyl(Xb, Yb, Zb) #Compute vertical extrusion of each cell on bottom patch
-            save_point(self.directory + self.FolderSaveFiles , n2d, nz, pbed, Xb, Yb, Zb, pointer) #save the file 'pointerpostproc.nc'
-
-        if not os.path.exists(self.directory + self.FolderSaveFiles + '/read_mesh.h5'):
-            # If 'read_mesh.h5' does not exist --> write and save it
-            Xb, Yb, Zb = fluidfoam.readmesh(self.directory, precision = 13)
-            hf = h5py.File(self.directory + self.FolderSaveFiles +'/read_mesh.h5', 'w')
-            hf.create_dataset('Xb',data=Xb)
-            hf.create_dataset('Yb',data=Yb)
-            hf.create_dataset('Zb',data=Zb)
-            hf.close()
-        else : 
-            # If 'read_mesh.h5' exists --> read it 
-            hf = h5py.File(self.directory + self.FolderSaveFiles +'/read_mesh.h5', 'r')
+        else :
+            hf = h5py.File(self.solsav+'/read_mesh.h5', 'r')
             Xb = np.array(hf.get('Xb'))
             Yb = np.array(hf.get('Yb'))
             Zb = np.array(hf.get('Zb'))
-        
-        #Read '/pointerpostproc.nc'
-        n2d, nz, pbed, pointer = read_point(self.directory + self.FolderSaveFiles)
-
+            
         ncell = np.size(Xb)
+        if not self.read_point_nc:
+            n2d, nz, pbed, pointer = create_point_2Dcyl(Xb, Yb, Zb)
+            if self.save_point_nc:
+                save_point(self.solsav, n2d, nz, pbed, Xb, Yb, Zb, pointer)
+        else:
+            n2d, nz, pbed, pointer = read_point(self.solsav)
 
         Xb = Xb[pbed]
         Yb = Yb[pbed]
@@ -776,11 +764,11 @@ class Threedimsimu(object):
         self.nz = nz
         self.pbed = pbed
         self.pointer = pointer
-        self.createtime()
+        self.createtime(read_result)
         
-    def createtime(self):
+    def createtime(self, read_result):
         try:
-            proc = subprocess.Popen(["foamListTimes", "-case", self.directory], stdout=subprocess.PIPE)
+            proc = subprocess.Popen(["foamListTimes", "-case", self.sol], stdout=subprocess.PIPE)
         except FileNotFoundError:
             print("foamListTimes : command not found")
             print("Do you have load OpenFoam environement?")
@@ -809,21 +797,24 @@ class Threedimsimu(object):
         self.Nt = Nt
         self.tread = tread
         
-        self.postProcess()
+        self.postProcess(read_result)
           
-    def postProcess(self):
+    def postProcess(self, read_result):
         k = -1
-        #if not read_result:  # Si read_result = False (i.e il ne sont pas créés)
-        if not os.path.exists(self.directory + self.FolderSaveFiles +'/read_bedinterface.h5') : 
-            # If '/read_bedinterface.h5' does not exist --> create it
+        if not read_result:
             zbed = np.zeros((self.n2d, self.Nt))
             alpha = np.zeros((self.n2d, self.nz, self.Nt))
             for t in tqdm(self.tread):
                 print("Reading time: %s s" % t)
                 k = k + 1
                 alphauns = fluidfoam.readscalar(self.sol, t, "alpha.a", verbose=True, precision=13)
+                #aUauns[:,:,k] = fluidfoam.readvector(self.sol, t, "alphaUa", verbose=False, precision=13)
                 self.time[k] = float(t)
                 alpha[:, :, k] = alphauns[self.pointer]
+                #varorig = aUauns[:,:,k]
+                #varorig = varorig[:,self.pointer]
+                #print(np.shape(varorig))
+                #aUa[:,:,:,k] = varorig
             
             for i in range(self.n2d):
                 for t in range(self.Nt):
@@ -833,11 +824,10 @@ class Threedimsimu(object):
                         bedcondi = np.where(alpha[i, :, t] <= self.asint)
                         zbed[i, t] = self.Zb[i,bedcondi[0][0]]
             print(zbed[:,-1])                    
-            hf = h5py.File(self.directory + self.FolderSaveFiles+'/read_bedinterface.h5', 'w')
+            hf = h5py.File(self.solsav+'/read_bedinterface.h5', 'w')
             hf.create_dataset('zbed',data=zbed)
             hf.close()
         else :
-            # If '/read_bedinterface.h5' exists --> read it
             for t in tqdm(self.tread):
                 k = k + 1
                 self.time[k] = float(t)

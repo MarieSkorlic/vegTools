@@ -28,6 +28,9 @@ import fluidfoam
 from tqdm import tqdm
 import h5py
 import os, sys
+import mathtools
+from mathtools import integrate_slice
+from vegTools.functions import get_dz_slice, get_dS_bottom
 
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -690,10 +693,18 @@ class ThreedimSqrsimu(object):
 # extract the entire domain
 #
 class Threedimsimu(object):
-    def __init__(self,path = None ,simu = None,asint = 0.60, delete_mesh = False, FolderSaveFiles = 'constant'):
+    def __init__(self,path = None ,simu = None,
+                 asint = 0.60, asups = 0.08, 
+                 delete_mesh = False,delete_PostProFiles = False, 
+                 FolderSaveFiles = 'constant', PostProFilesToDelete = ['alphainterface.h5']):
         
+        ## -- 
+        self.asint = asint #Volume fraction limit for the bed
+        self.asusp = asups #Volume fraction limit for suspension
         self.FolderSaveFiles = FolderSaveFiles
-        
+        self.PostProFilesToDelete = PostProFilesToDelete
+        ## --
+
         if path == None and simu == None:
                 # If nothing if given, consider the current directory as the 
                 # simulation to load
@@ -719,14 +730,25 @@ class Threedimsimu(object):
             if self.directory.endswith('/') is False: 
                 self.directory += '/'
         
-        if delete_mesh and os.path.exists(self.directory + self.FolderSaveFiles +'/read_mesh.h5'): 
-            #If deletefile == True , remove 'read_mesh.h5'
+        if delete_mesh and os.path.exists(self.directory + self.FolderSaveFiles +'/mesh.h5'): 
+            #If delete_mesh == True , remove 'read_mesh.h5'
             print('Deleting the mesh file')
-            os.system(f'rm -r {self.directory}{self.FolderSaveFiles}/read_mesh.h5')
+            os.system(f'rm -r {self.directory}{self.FolderSaveFiles}/mesh.h5')
+        
+        if delete_PostProFiles : 
+            for f in PostProFilesToDelete :
+                #If delete_PostProFiles == True , remove files from PostProFilesToDelete
+                if os.path.exists(self.directory + self.FolderSaveFiles + '/' +  f) : 
+                    print(f'Delete {f} file')
+                    os.system(f'rm -r {self.directory}{self.FolderSaveFiles}/{f}')
+
+            
         
         #Use createmesh function
         self.createmesh()
 
+        #Use postProcess function 
+        self.postProcess()
 
 
     def createmesh(self):
@@ -741,43 +763,61 @@ class Threedimsimu(object):
             n2d, nz, pbed, pointer = create_point_2Dcyl(Xb, Yb, Zb) #Compute vertical extrusion of each cell on bottom patch
             save_point(self.directory + self.FolderSaveFiles , n2d, nz, pbed, Xb, Yb, Zb, pointer) #save the file 'pointerpostproc.nc'
 
-        if not os.path.exists(self.directory + self.FolderSaveFiles + '/read_mesh.h5'):
-            # If 'read_mesh.h5' does not exist --> write and save it
-            Xb, Yb, Zb = fluidfoam.readmesh(self.directory, precision = 13)
-            hf = h5py.File(self.directory + self.FolderSaveFiles +'/read_mesh.h5', 'w')
+        if not os.path.exists(self.directory + self.FolderSaveFiles + '/mesh.h5'):
+            # If 'mesh.h5' does not exist --> write and save it
+            Xb, Yb, Zb = fluidfoam.readmesh(self.directory, precision = 13) #Read center of cells
+            V = fluidfoam.readfield(self.directory,time_name = 'latestTime',name = 'V') #Read volume of cells
+            ## -- Compute surface of cells on bottom patch
+            dS_bottom = get_dS_bottom(Zb,V)
+            ## -- Compute dz of each slice
+            dz_slice = get_dz_slice(Zb,V)
+            
+            hf = h5py.File(self.directory + self.FolderSaveFiles +'/mesh.h5', 'w')
             hf.create_dataset('Xb',data=Xb)
             hf.create_dataset('Yb',data=Yb)
             hf.create_dataset('Zb',data=Zb)
+            hf.create_dataset('V',data=V)
+            hf.create_dataset('dS_bottom',data=dS_bottom)
+            hf.create_dataset('dz_slice',data=dz_slice)
             hf.close()
         else : 
-            # If 'read_mesh.h5' exists --> read it 
-            hf = h5py.File(self.directory + self.FolderSaveFiles +'/read_mesh.h5', 'r')
+            # If 'mesh.h5' exists --> read it 
+            hf = h5py.File(self.directory + self.FolderSaveFiles +'/mesh.h5', 'r')
             Xb = np.array(hf.get('Xb'))
             Yb = np.array(hf.get('Yb'))
             Zb = np.array(hf.get('Zb'))
+            V = np.array(hf.get('V'))
+            dS_bottom = np.array(hf.get('dS_bottom'))
+            dz_slice = np.array(hf.get('dz_slice'))
         
         #Read '/pointerpostproc.nc'
         n2d, nz, pbed, pointer = read_point(self.directory + self.FolderSaveFiles)
 
         ncell = np.size(Xb)
 
+        #Reorder the arrays
         Xb = Xb[pbed]
         Yb = Yb[pbed]
         Zb = Zb[pointer][:,:]
+        V = V[pointer][:,:]
         nx = np.unique(np.round(Xb,6)).shape[0]
         ny = np.unique(np.round(Yb,6)).shape[0]
         nz = np.unique(np.round(Zb,6)).shape[0]
 
+        #Attributes 
         self.Xb = Xb
         self.Yb = Yb
         self.Zb = Zb
+        self.V = V
+        self.dz_slice = dz_slice
+        self.dS_bottom = dS_bottom
         self.ncell = ncell
         self.n2d = n2d
         self.nz = nz
         self.pbed = pbed
         self.pointer = pointer
         self.createtime()
-        
+    
     def createtime(self):
         try:
             proc = subprocess.Popen(["foamListTimes", "-case", self.directory], stdout=subprocess.PIPE)
@@ -786,16 +826,13 @@ class Threedimsimu(object):
             print("Do you have load OpenFoam environement?")
             sys.exit(0)
         output = proc.stdout.read()
-        tread = output.decode().rstrip().split("\n")
-        if len(tread) != 1 :
-            tread = tread[:80]
-            dt = float(tread[1])-float(tread[0])
-            Nt = len(tread)
-        else :
-            tread = np.arange(0.25,20.25,0.25)
-            tread = np.array(tread).astype(str)
-            dt = 0.25
-            Nt = 80
+        tread = output.decode().rstrip().split("\n") #Time folders
+        Nt = len(tread) #Numer of time folders
+    
+        if Nt == 0 : 
+            raise ValueError('No time folder found, please reconstruct the case or run the simulation')
+              
+        #Remove '.0' in time folders names 
         k=-1
         for s in tread:
             k=k+1
@@ -805,23 +842,28 @@ class Threedimsimu(object):
         time = np.zeros(Nt)
         
         self.time = time
-        self.dt = dt
+        #self.dt = dt # No need for dt now 
         self.Nt = Nt
         self.tread = tread
-        
-        self.postProcess()
+
+        #self.postProcess()
           
     def postProcess(self):
-        k = -1
-        #if not read_result:  # Si read_result = False (i.e il ne sont pas créés)
-        if not os.path.exists(self.directory + self.FolderSaveFiles +'/read_bedinterface.h5') : 
-            # If '/read_bedinterface.h5' does not exist --> create it
-            zbed = np.zeros((self.n2d, self.Nt))
+        #
+        # -- Bed elevation and bed load interface -- ##
+        #
+        k = -1 #Index for the time
+        if not os.path.exists(self.directory + self.FolderSaveFiles + '/alphainterface.h5') : 
+            # If '/alphainterface.h5' does not exist --> create it
+            self.zbed = np.zeros((self.n2d, self.Nt)) #Elevation of the bed
+            self.zbedload = np.zeros((self.n2d, self.Nt)) #Elevation of bed load layer
+            self.phis_bedload = np.zeros((self.n2d, self.Nt)) #Average value of volume fraction in bedload layer
+            self.phis_susp = np.zeros((self.n2d, self.Nt)) #Average value of volume fraction in supsension layer
             alpha = np.zeros((self.n2d, self.nz, self.Nt))
             for t in tqdm(self.tread):
                 print("Reading time: %s s" % t)
                 k = k + 1
-                alphauns = fluidfoam.readscalar(self.sol, t, "alpha.a", verbose=True, precision=13)
+                alphauns = fluidfoam.readscalar(self.directory , t, "alpha.a", verbose=True, precision=13)
                 self.time[k] = float(t)
                 alpha[:, :, k] = alphauns[self.pointer]
             
@@ -831,18 +873,44 @@ class Threedimsimu(object):
                         pass
                     else:
                         bedcondi = np.where(alpha[i, :, t] <= self.asint)
-                        zbed[i, t] = self.Zb[i,bedcondi[0][0]]
-            print(zbed[:,-1])                    
-            hf = h5py.File(self.directory + self.FolderSaveFiles+'/read_bedinterface.h5', 'w')
-            hf.create_dataset('zbed',data=zbed)
+                        self.zbed[i, t] = self.Zb[i,bedcondi[0][0]]
+                        ## -- ##
+                        bedloadcondi = np.where(
+                                               np.logical_and (alpha[i, :, t] <= self.asint, alpha[i, :, t] >= self.asusp)
+                                                )[0]
+                        self.zbedload[i,t] = self.Zb[i,bedloadcondi[-1]]
+                        ## -- ##
+                        self.phis_bedload[i,t] = (np.sum(self.V[i, :] * alpha[i, :, t],
+                                                        where=np.logical_and(self.Zb[i, :] <= self.zbedload[i,t],
+                                                                        self.Zb[i, :] >= self.zbed[i,t]))
+                                                        / np.sum(self.V[i, :],
+                                                        where=np.logical_and(self.Zb[i, :] <= self.zbedload[i,t],
+                                                                        self.Zb[i, :] >= self.zbed[i,t])))
+                        ## -- ##
+                        self.phis_susp[i,t] = (np.sum(self.V[i, :] * alpha[i, :, t],
+                                                        where=self.Zb[i, :] > self.zbedload[i,t])
+                                                        / np.sum(self.V[i, :],
+                                                        where=self.Zb[i, :] > self.zbedload[i,t])
+                                                )                         
+                        
+            print(f'At latest time : position of the bed {self.zbed[:,-1]}')   
+            print(f'At latest time : position of the bedload layer {self.zbedload[:,-1]}')                 
+            hf = h5py.File(self.directory + self.FolderSaveFiles+'/alphainterface.h5', 'w')
+            hf.create_dataset('zbed',data=self.zbed)
+            hf.create_dataset('zbedload',data=self.zbedload)
+            hf.create_dataset('phis_bedload',data=self.phis_bedload)
+            hf.create_dataset('phis_susp',data=self.phis_susp)
             hf.close()
         else :
-            # If '/read_bedinterface.h5' exists --> read it
+            # If '/alphainterface.h5' exists --> read it
             for t in tqdm(self.tread):
+                print("\n Reading time: %s s" % t)
                 k = k + 1
                 self.time[k] = float(t)
-            with h5py.File(self.solsav+'/read_bedinterface.h5', 'r') as hf:
-                zbed = np.array(hf.get('zbed'))
+            with h5py.File(self.directory + self.FolderSaveFiles + '/alphainterface.h5', 'r') as hf:
+                self.zbed = np.array(hf.get('zbed'))
+                self.zbedload = np.array(hf.get('zbedload'))
+                self.phis_bedload = np.array(hf.get('phis_bedload'))
+                self.phis_susp = np.array(hf.get('phis_susp'))
+            #hf.close()
 
-        self.zbed = zbed        #  bed elevation
-        

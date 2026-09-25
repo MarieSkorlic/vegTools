@@ -311,6 +311,28 @@ def get_dz_slice(z, V):
     dz_slice = np.divide(V_tot_per_z,S0)
     return dz_slice
 
+def get_dS_bottom(z, V):
+    """
+    Compute Surface of each cells on the bottom patch.
+
+    Inputs:
+    - z: array of z-coordinates
+    - V: array of cell volumes
+
+    Outputs:
+    - dS_bottom: array of dS values on bottom patch
+    """
+
+    # Compute the bottom cell layer thickness
+    z_min = np.min(np.unique(z))
+    cells_bottom = np.where(z == z_min)
+    V_bottom = V[cells_bottom]
+    dz_bottom = 2 * z_min 
+    dS_bottom = V_bottom / dz_bottom
+    S0 = np.sum(dS_bottom)
+    
+    return dS_bottom
+
 def get_nc_alongx(ratio, dr , phi , D = None) : 
     if D is None : 
         D = 0.01 #m

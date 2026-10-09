@@ -692,9 +692,10 @@ class ThreedimSqrsimu(object):
 #
 # extract the entire domain
 #
-class Threedimsimu(object):
+class sedFoamPostPro(object):
     def __init__(self,path = None ,simu = None,
-                 asint = 0.60, asups = 0.08, 
+                 asint = 0.60, asups = 0.08,
+                 rho = 1000, 
                  delete_mesh = False,delete_PostProFiles = False, 
                  FolderSaveFiles = 'constant', PostProFilesToDelete = ['alphainterface.h5']):
         
@@ -703,6 +704,7 @@ class Threedimsimu(object):
         self.asusp = asups #Volume fraction limit for suspension
         self.FolderSaveFiles = FolderSaveFiles
         self.PostProFilesToDelete = PostProFilesToDelete
+        self.rho = rho
         ## --
 
         if path == None and simu == None:
@@ -818,40 +820,61 @@ class Threedimsimu(object):
         self.pointer = pointer
         self.createtime()
     
-    def createtime(self):
-        try:
-            proc = subprocess.Popen(["foamListTimes", "-case", self.directory], stdout=subprocess.PIPE)
-        except FileNotFoundError:
-            print("foamListTimes : command not found")
-            print("Do you have load OpenFoam environement?")
-            sys.exit(0)
-        output = proc.stdout.read()
-        tread = output.decode().rstrip().split("\n") #Time folders
-        Nt = len(tread) #Numer of time folders
-    
-        if Nt == 0 : 
-            raise ValueError('No time folder found, please reconstruct the case or run the simulation')
-              
-        #Remove '.0' in time folders names 
-        k=-1
-        for s in tread:
-            k=k+1
-            s=s.replace(".0","")
-            tread[k]=s
-            
-        time = np.zeros(Nt)
-        
-        self.time = time
-        #self.dt = dt # No need for dt now 
-        self.Nt = Nt
-        self.tread = tread
 
-        #self.postProcess()
+
+    def createtime(self):
+        # List entries in the case directory
+        try:
+            entries = os.listdir(self.directory)
+        except FileNotFoundError:
+            print(f"Case directory not found: {self.directory}")
+            sys.exit(0)
+
+        # Keep only time folders
+        tread = []
+        time = []
+        for entry in entries:
+            full_path = os.path.join(self.directory, entry)
+            if os.path.isdir(full_path):
+                try:
+                    t = float(entry)   # '0','1','10' etc...
+                except ValueError:
+                    continue           # 'constant', 'system', 'postProcessing' etc...
+                tread.append(entry)
+                time.append(t)
+        
+        if '0' in tread :
+            #Remove '0' from tread
+            tread.remove('0')
+        if 0 in time : 
+            #Remove 0 from time
+            time.remove(0)
+
+        if len(tread) == 0:
+            raise ValueError('No time folder found, please reconstruct the case or run the simulation')
+
+        # Sort chronologically
+        order = np.argsort(time)
+        self.time = np.array(time)[order]
+        self.tread = [tread[i] for i in order]
+        self.Nt = len(self.tread)
           
+
     def postProcess(self):
-        #
-        # -- Bed elevation and bed load interface -- ##
-        #
+        """
+        Compute and write in .h5 file : 
+             - zbed : position (in z direction) of the bed at each time step 
+               (such that phis < asint) [m]
+             - zbedload : position (in z direction) of the bedload layer at each time step
+               (such that phis < asusp) [m]
+             - phis_bedload : Average fraction of volume fraction in bedload layer 
+               (average over depth) [-]
+             - phis_susp : Average fraction of volume fraction in suspension layer 
+               (average over depth) [-]
+             - transport_rate : Integrated over depth the quantity: phis * (velcoity of particles) [m²/s]
+             - ustar_simu : Friction velocity at the bed [m/s]
+
+        """
         k = -1 #Index for the time
         if not os.path.exists(self.directory + self.FolderSaveFiles + '/alphainterface.h5') : 
             # If '/alphainterface.h5' does not exist --> create it
@@ -859,26 +882,47 @@ class Threedimsimu(object):
             self.zbedload = np.zeros((self.n2d, self.Nt)) #Elevation of bed load layer
             self.phis_bedload = np.zeros((self.n2d, self.Nt)) #Average value of volume fraction in bedload layer
             self.phis_susp = np.zeros((self.n2d, self.Nt)) #Average value of volume fraction in supsension layer
+            self.transport_rate = np.zeros((self.n2d, self.Nt)) #Integrated value of transport rate above the bed
+            self.ustar_simu = np.zeros((self.n2d, self.Nt)) #Friction velocity at the bed 
+            
+
+            #Define array of 'ordered' quantities from OF 
             alpha = np.zeros((self.n2d, self.nz, self.Nt))
+            U_a = np.zeros((self.n2d, self.nz, self.Nt))
+            ustar_simu = np.zeros((self.n2d, self.nz, self.Nt))
+
             for t in tqdm(self.tread):
                 print("Reading time: %s s" % t)
                 k = k + 1
+
+                #Read 'unstructured' data from OF and 'order' it 
+                # - Volume fraction of particles
                 alphauns = fluidfoam.readscalar(self.directory , t, "alpha.a", verbose=True, precision=13)
-                self.time[k] = float(t)
                 alpha[:, :, k] = alphauns[self.pointer]
-            
+                # - Velocity of particles (streamwise direction)
+                U_auns = fluidfoam.readvector(self.directory , t, "U.a", verbose=True, precision=13)[0]
+                U_a[:, :, k] = U_auns[self.pointer]
+                # - Stress (Taub) (streamwise direction)
+                Taub_uns = fluidfoam.readtensor(self.directory , t, "Taub", verbose=True, precision=13)[0]
+                ustar_simu[:,:,k] = np.sqrt(np.abs(Taub_uns[self.pointer])/self.rho)
+
+                # - Time
+                self.time[k] = float(t)
+
+
             for i in range(self.n2d):
                 for t in range(self.Nt):
                     if np.isnan(alpha[i,:, t]).any():
                         pass
                     else:
-                        bedcondi = np.where(alpha[i, :, t] <= self.asint)
-                        self.zbed[i, t] = self.Zb[i,bedcondi[0][0]]
                         ## -- ##
-                        bedloadcondi = np.where(
+                        bedcondi = np.min(np.where(alpha[i, :, t] <= self.asint)[0])
+                        self.zbed[i, t] = self.Zb[i,bedcondi]
+                        ## -- ##
+                        bedloadcondi = np.max(np.where(
                                                np.logical_and (alpha[i, :, t] <= self.asint, alpha[i, :, t] >= self.asusp)
-                                                )[0]
-                        self.zbedload[i,t] = self.Zb[i,bedloadcondi[-1]]
+                                                )[0])
+                        self.zbedload[i,t] = self.Zb[i,bedloadcondi]
                         ## -- ##
                         self.phis_bedload[i,t] = (np.sum(self.V[i, :] * alpha[i, :, t],
                                                         where=np.logical_and(self.Zb[i, :] <= self.zbedload[i,t],
@@ -891,15 +935,23 @@ class Threedimsimu(object):
                                                         where=self.Zb[i, :] > self.zbedload[i,t])
                                                         / np.sum(self.V[i, :],
                                                         where=self.Zb[i, :] > self.zbedload[i,t])
-                                                )                         
-                        
-            print(f'At latest time : position of the bed {self.zbed[:,-1]}')   
-            print(f'At latest time : position of the bedload layer {self.zbedload[:,-1]}')                 
+                                                )
+                        ## -- ##
+                        self.transport_rate[i,t] = (np.sum(alpha[i,:,t] * U_a[i,:,t] * self.dz_slice[:],
+                                                where = np.logical_and(self.Zb[i, :] > self.zbed[i,t],self.Zb[i,:] < self.zbedload[i,t])
+                                                ))
+                        ## -- ##
+                        self.ustar_simu[i,t] = ustar_simu[i,bedcondi,t]
+     
+                                      
+                            
             hf = h5py.File(self.directory + self.FolderSaveFiles+'/alphainterface.h5', 'w')
             hf.create_dataset('zbed',data=self.zbed)
             hf.create_dataset('zbedload',data=self.zbedload)
             hf.create_dataset('phis_bedload',data=self.phis_bedload)
             hf.create_dataset('phis_susp',data=self.phis_susp)
+            hf.create_dataset('transport_rate',data=self.transport_rate)
+            hf.create_dataset('ustar_simu',data=self.ustar_simu)
             hf.close()
         else :
             # If '/alphainterface.h5' exists --> read it
@@ -912,5 +964,7 @@ class Threedimsimu(object):
                 self.zbedload = np.array(hf.get('zbedload'))
                 self.phis_bedload = np.array(hf.get('phis_bedload'))
                 self.phis_susp = np.array(hf.get('phis_susp'))
-            #hf.close()
+                self.transport_rate = np.array(hf.get('transport_rate'))
+                self.ustar_simu = np.array(hf.get('ustar_simu'))
 
+            #hf.close()

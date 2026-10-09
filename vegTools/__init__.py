@@ -5,7 +5,7 @@ from vegTools.simuPostPro import simuPostPro
 """
 Computes bed elevation of sedFoam simulations (requires having loaded OpenFoam environment)
 """
-from vegTools.sedFoamPostPro import Threedimsimu
+from vegTools.sedFoamPostPro import sedFoamPostPro
 from vegTools.sedFoamPostPro import divergence,ddt
 from vegTools.sedFoamPostPro import create_point_2Dcyl,create_point_1Dcart
 from vegTools.sedFoamPostPro import save_1Dpoint,read_1Dpoint,save_point,read_point

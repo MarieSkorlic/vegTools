@@ -99,7 +99,7 @@ class simuPostPro(object):
                 self.readopenfoam(timeStep=timeStep,boundary = boundary, structured=structured, 
                         dataToLoad=dataToLoad, precision=precision,
                         order=order)
-                #Read phi and Rep from .ods file 
+                #Read phi, Rep and nu from .ods file 
                 self.compute_simulations_data()
                 #Compute profiles
                 self.compute_profiles()
@@ -108,13 +108,13 @@ class simuPostPro(object):
                 self.compute_profiles_TKE()
                 self.compute_profiles_DKE()
                 # #Compute macroscopic quantities
-                # self.compute_macroscopic_quantities()
+                self.compute_macroscopic_quantities()
                 #Write and readNetCDF for postProcessed Data
                 self.writeNetCDFPostPro(boundary = boundary)
                 self.readNetCDF(filename=filenamePostPro)
             else : 
                 self.readNetCDF(filename = filenameRawData)
-                #Read phi and Rep from .ods file 
+                #Read phi, Rep and nu from .ods file 
                 self.compute_simulations_data()
                 #Compute profiles
                 self.compute_profiles()
@@ -123,7 +123,7 @@ class simuPostPro(object):
                 self.compute_profiles_TKE()
                 self.compute_profiles_DKE()
                 # #Compute macroscopic quantities
-                # self.compute_macroscopic_quantities()
+                self.compute_macroscopic_quantities()
                 #Write and readNetCDF for postProcessed Data
                 self.writeNetCDFPostPro(boundary = boundary)
                 self.readNetCDF(filename=filenamePostPro)
@@ -146,15 +146,17 @@ class simuPostPro(object):
         if python_name not in self.variables:
             self.variables.append(python_name)
 
+
     def compute_simulations_data(self) :
         """
-        Function which extract phi and Rep from Description.ods
+        Function which extract phi,Rep and nu from Description.ods
         """
         PATH_description = str(Path(self.directory).parent)
         case = os.path.basename(self.simu)
         #Read csv Description.ods to extract 'phi'
         data = read_description(PATH_description,case)
-        self.phif,self.phi, self.Rep   = 1 - data['phi'], data['phi'] , data['Rep']
+        self.phif,self.phi, self.Rep = 1 - data['phi'], data['phi'] , data['Rep']
+        self.nu = data['nu']
 
     def compute_profiles(self) :
         """
@@ -162,23 +164,25 @@ class simuPostPro(object):
         for each variable
         """
         self.profiles = {}
-        #Change names from OpenFoam to 'phython' names
-        OF_python_names = {
-                    'Ubar0': 'Ubar',
-                    'Ubar1': 'Vbar',
-                    'Ubar2': 'Wbar',
-                    }
-        #in sedFoam velocity is U_b and in pimpleFoam velocity is U
-        if hasattr(self, 'U_bbar0'):
-            s = '_b'
-        else:
-            s = ''
-        #Choose name 'UbarX' or 'U_bbarX'
-        Ubar0 = getattr(self, f'U{s}bar0')
-        Ubar1 = getattr(self, f'U{s}bar1')
-        Ubar2 = getattr(self, f'U{s}bar2')
         
-        #---
+        # in sedFoam velocity is U_b and U_a, in pimpleFoam velocity is U
+        if hasattr(self, 'U_bbar0'):
+            s = ['_b', '_a']
+        else:
+            s = ['']
+
+        # Build the renaming dict for each phase/velocity convention
+        OF_python_names = {}
+        for suf in s:
+            OF_python_names.update({
+                f'U{suf}bar0': f'U{suf}bar',
+                f'U{suf}bar1': f'V{suf}bar',
+                f'U{suf}bar2': f'W{suf}bar',
+                f'U{suf}0': f'U{suf}',
+                f'U{suf}1': f'V{suf}',
+                f'U{suf}2': f'W{suf}',
+            })
+            #---
 
         for var in self.variables :
             field = getattr(self,var)
@@ -189,16 +193,27 @@ class simuPostPro(object):
                 self.profiles[f'{name}_mean'] = profile
         
         #Compute TKE_profile (mandatory because not in self.variables)
-        var_to_compute_TKE = ['UUbar','Ubar0','VVbar','Ubar1','WWbar','Ubar2']
+        #in sedFoam velocity is U_b and in pimpleFoam velocity is U
+        if hasattr(self, 'U_bbar0'):
+            s = '_b'
+        else:
+            s = ''
+        #Choose name 'UbarX' or 'U_bbarX'
+        Ubar0 = getattr(self, f'U{s}bar0')
+        Ubar1 = getattr(self, f'U{s}bar1')
+        Ubar2 = getattr(self, f'U{s}bar2')
+        # -- 
+
+        var_to_compute_TKE = ['UUbar','VVbar','WWbar', f'U{s}bar0',f'U{s}bar1',f'U{s}bar2'  ]
         if any(v not in self.variables for v in var_to_compute_TKE):
             #If a variable is missing for computing the TKE : each component = 0 
             Uprime2 = np.zeros(len(np.unique(np.round(self.z , 6)))) #Set to zero
             Vprime2 = np.zeros(len(np.unique(np.round(self.z , 6)))) #Set to zero
             Wprime2 = np.zeros(len(np.unique(np.round(self.z , 6)))) #Set to zero
         else : 
-            Uprime2 , Vprime2 , Wprime2 = get_profiles([self.UUbar - self.Ubar0 * self.Ubar0 , 
-                                                        self.VVbar - self.Ubar1 * self.Ubar1 , 
-                                                        self.WWbar - self.Ubar2 * self.Ubar2],
+            Uprime2 , Vprime2 , Wprime2 = get_profiles([self.UUbar - Ubar0 * Ubar0 , 
+                                                        self.VVbar - Ubar1 * Ubar1 , 
+                                                        self.WWbar - Ubar2 * Ubar2],
                                                         self.z , self.V)
         
         #Resolved TKE
@@ -207,8 +222,11 @@ class simuPostPro(object):
         
         #SGS TKE
         if hasattr(self , 'turbulenceProperties_kbar') :
-            #If SGS turbulence has been computed : 
+            #If SGS turbulence has been computed (for pimpleFoam simulations) : 
             k_SGS = get_profiles([self.turbulenceProperties_kbar] , self.z , self.V)[0]
+        elif hasattr(self , 'k_bbar') :
+            #If SGS turbulence has been computed (for sedFoam simulations) : 
+            k_SGS = get_profiles([self.k_bbar] , self.z , self.V)[0]
         else :
             #If SGS turbulence has not been computed :  
             k_SGS = np.zeros(len(np.unique(np.round(self.z , 6)))) #Set to zero
@@ -239,9 +257,11 @@ class simuPostPro(object):
             Cd = np.zeros(len(np.unique(np.round(self.z , 6)))) #Set to zero
         else : 
             #If force on cylinders has been computed
+            ## WARNING!! *(self.nu / 1e-6) because for low Reynolds simulations, nu=1e-6 for force
+            ## computation, which is not the case
             fdz_form = get_fdz(self,self.phi,'form')
-            fdz_viscous = get_fdz(self,self.phi,'viscous')
-            fdz = get_fdz(self,self.phi,'total')
+            fdz_viscous = get_fdz(self,self.phi,'viscous') * (self.nu/1e-6)
+            fdz = fdz_form + fdz_viscous
             Cd = get_Cd(self,self.phi)
         
         self.profiles['fdz_form'] = fdz_form
@@ -249,7 +269,8 @@ class simuPostPro(object):
         self.profiles['fdz'] = fdz
         self.profiles['Cd'] = Cd
 
-    def compute_profiles_stresses(self , rho = 1000 , nu = 1e-6) :
+
+    def compute_profiles_stresses(self , rho = 1000) :
         #in sedFoam velocity is U_b and in pimpleFoam velocity is U
         if hasattr(self, 'U_bbar0'):
             s = '_b'
@@ -269,7 +290,7 @@ class simuPostPro(object):
             #If gradient computed
             gradUbar_mean = get_profiles([self.grad_Ubar6],self.z,self.V)[0]
         
-        viscous_stress = rho * gradUbar_mean * nu
+        viscous_stress = rho * gradUbar_mean * self.nu
         self.profiles['viscous_stress'] = viscous_stress
 
         # ---- Reynolds Stress [Pa]
@@ -298,7 +319,7 @@ class simuPostPro(object):
         disp_stress = - rho * (Ubar_Wbar_mean - Ubar_mean * Wbar_mean)
         self.profiles['disp_stress'] = disp_stress
 
-    def compute_profiles_TKE(self , rho = 1000 , nu = 1e-6) :
+    def compute_profiles_TKE(self , rho = 1000) :
         #in sedFoam velocity is U_b and in pimpleFoam velocity is U
         if hasattr(self, 'U_bbar0'):
             s = '_b'
@@ -349,8 +370,8 @@ class simuPostPro(object):
             
 
             # ---- Dissipation 
-            epsilonP1_bar_mean = nu * get_profiles([self.epsilonP1bar] , self.z , self.V)[0]
-            epsilonP2_bar_mean = - nu * (get_profiles([self.grad_Ubar6],self.z , self.V)[0] * 
+            epsilonP1_bar_mean = self.nu * get_profiles([self.epsilonP1bar] , self.z , self.V)[0]
+            epsilonP2_bar_mean = - self.nu * (get_profiles([self.grad_Ubar6],self.z , self.V)[0] * 
                                             get_profiles([self.grad_Ubar6] , self.z , self.V)[0])
 
             
@@ -422,7 +443,7 @@ class simuPostPro(object):
             k_resol = (1/2) * (Uprime2 + Vprime2 + Wprime2)
             k_tot = k_resol + k_SGS
 
-            Tnu = self.phif * nu * derivate_wall(unique_z,derivate_wall(unique_z,k_tot))
+            Tnu = self.phif * self.nu * derivate_wall(unique_z,derivate_wall(unique_z,k_tot))
             self.profiles['Tnu'] = Tnu 
 
 
@@ -451,7 +472,7 @@ class simuPostPro(object):
             self.profiles['totalTKE'] = totalTKE
 
 
-    def compute_profiles_DKE(self , rho = 1000 , nu = 1e-6) :
+    def compute_profiles_DKE(self , rho = 1000) :
         
         #in sedFoam velocity is U_b and in pimpleFoam velocity is U
         if hasattr(self, 'U_bbar0'):
@@ -488,10 +509,10 @@ class simuPostPro(object):
                     self.grad_Ubar2**2 , self.grad_Ubar5**2 , self.grad_Ubar8**2]
             sqrgrad = np.sum(sqrgrad, axis = 0) #Sum all components
 
-            epspp1 = self.phif * nu * get_profiles([sqrgrad],self.z , self.V)[0]
+            epspp1 = self.phif * self.nu * get_profiles([sqrgrad],self.z , self.V)[0]
 
             #P2
-            epspp2 = -self.phif * nu * (
+            epspp2 = -self.phif * self.nu * (
                         get_profiles([self.grad_Ubar6],self.z, self.V)[0])**2
 
             #Total espilon 
@@ -547,7 +568,7 @@ class simuPostPro(object):
                     + Vprimeprime * self.grad_Ubar7
                     + Wprimeprime * self.grad_Ubar8
                     )
-            Tnupp = self.phif * nu * derivate_wall(
+            Tnupp = self.phif * self.nu * derivate_wall(
                                     unique_z,
                                     get_profiles([Tnupp],self.z, self.V)[0])
             self.profiles['Tnupp'] = Tnupp
@@ -608,24 +629,26 @@ class simuPostPro(object):
 
 
         #u*
-        dz_bottom = get_dz_slice(self.z, self.V)[0]  #dz of the first cell 
-        z_min = np.min(np.unique(self.z))
-        dz_bottom = 2 * z_min 
-        mask_cells_bottom = np.where(self.z == z_min)
-        V_bottom = self.V[mask_cells_bottom]
-        dS_bottom = V_bottom / dz_bottom  #Surface of each cell at the bottom 
-        S0 = np.sum(dS_bottom) #Surace of the bottom patch 
-        #u*(simulation)
-        self.ustar_simu = np.sum(np.sqrt(np.abs(self.wallShearStress_bottom0)) * dS_bottom)/S0
+        if hasattr(self,'wallShearStress_bottom0') : 
+            #If 'wallShearStress_bottom0' computed
+            dz_bottom = get_dz_slice(self.z, self.V)[0]  #dz of the first cell 
+            z_min = np.min(np.unique(self.z))
+            dz_bottom = 2 * z_min 
+            mask_cells_bottom = np.where(self.z == z_min)
+            V_bottom = self.V[mask_cells_bottom]
+            dS_bottom = V_bottom / dz_bottom  #Surface of each cell at the bottom 
+            S0 = np.sum(dS_bottom) #Surace of the bottom patch 
+            #u*(simulation)
+            self.ustar_simu = np.sum(np.sqrt(np.abs(self.wallShearStress_bottom0)) * dS_bottom)/S0
 
-        # Compute quantiles u* plot 
-        self.q25u_star = np.quantile(np.sqrt(np.abs(self.wallShearStress_bottom0)), 0.25, 
-                                method = 'inverted_cdf',
-                                weights = dS_bottom)
+            # Compute quantiles u* plot 
+            self.q25u_star = np.quantile(np.sqrt(np.abs(self.wallShearStress_bottom0)), 0.25, 
+                                    method = 'inverted_cdf',
+                                    weights = dS_bottom)
 
-        self.q75u_star = np.quantile(np.sqrt(np.abs(self.wallShearStress_bottom0)), 0.75, 
-                                method = 'inverted_cdf',
-                                weights = dS_bottom)
+            self.q75u_star = np.quantile(np.sqrt(np.abs(self.wallShearStress_bottom0)), 0.75, 
+                                    method = 'inverted_cdf',
+                                    weights = dS_bottom)
 
     def writeNetCDFPostPro(self,boundary):
         filename = "fieldsPostPro.nc"
@@ -658,14 +681,12 @@ class simuPostPro(object):
                                 'k_brack',
                                 'q25TKE','q75TKE',
                                 'q75u_star', 'q25u_star',
-                                'phif', 'Rep','phi'
+                                'phif', 'Rep','phi','nu'
                                 ]:
                 if hasattr(self, scalar_name):
                     var = ds.createVariable(scalar_name, 'f8')
                     var.assignValue(getattr(self, scalar_name))
 
-
-        print("Done writing NetCDF for PostProcessed Data")
 
     def readNetCDF(self,filename): 
         ncfile = nc.Dataset(self.directory + filename , "r" , format="NETCDF4")
